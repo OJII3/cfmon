@@ -1,0 +1,4 @@
+CF_ACCOUNT_ID=your-cloudflare-account-id
+CF_API_TOKEN=your-account-analytics-read-token
+INGEST_TOKEN=replace-with-random-ingest-token
+QUERY_TOKEN=replace-with-different-random-query-token

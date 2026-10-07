@@ -1,2 +1,11 @@
 .envrc
 .direnv/
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+.env.local
+agent/_build/
+agent/target/
+*.tsbuildinfo

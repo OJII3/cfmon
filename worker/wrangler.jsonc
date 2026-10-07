@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cfmon",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-07",
+  "analytics_engine_datasets": [
+    { "binding": "METRICS", "dataset": "cfmon_metrics" }
+  ],
+  "assets": {
+    "directory": "../dashboard/dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  }
+}
