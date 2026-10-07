@@ -22,8 +22,12 @@ extern "C" fn disk_used() -> Double = "cfmon_disk_used"
 extern "C" fn process_exit(code : Int) -> Unit = "exit"
 
 ///|
-#owned(url, token, body)
-extern "C" fn post(url : Bytes, token : Bytes, body : Bytes) -> Int = "cfmon_post"
+#owned(url, state_dir, body)
+extern "C" fn signed_post(url : Bytes, state_dir : Bytes, body : Bytes) -> Int = "cfmon_signed_post"
+
+///|
+#owned(state_dir)
+extern "C" fn fingerprint(state_dir : Bytes) -> String = "cfmon_fingerprint"
 
 ///|
 fn env(name : String) -> String {

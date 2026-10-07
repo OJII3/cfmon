@@ -37,7 +37,7 @@ fn split_to_array(s : String, separator : String) -> Array[String] {
 }
 
 ///|
-fn valid_url(url : String) -> Bool {
+fn valid_url(url : String, endpoint : String) -> Bool {
   let scheme_parts = split_to_array(url, "://")
   if scheme_parts.length() != 2 {
     return false
@@ -50,32 +50,91 @@ fn valid_url(url : String) -> Bool {
   if path_parts.length() != 4 ||
     path_parts[1] != "api" ||
     path_parts[2] != "v1" ||
-    path_parts[3] != "ingest" {
+    path_parts[3] != endpoint {
     return false
   }
   let authority = path_parts[0]
-  if authority == "" || authority.contains("@") || authority.contains(" ") {
+  if authority == "" || authority.contains("@") || authority.contains(" ") ||
+    authority.contains("?") || authority.contains("#") {
     return false
   }
-  if scheme == "http" {
-    if authority == "localhost" || authority == "127.0.0.1" {
-      return true
+  let host_port = split_to_array(authority, ":")
+  if host_port.length() > 2 || host_port[0] == "" {
+    return false
+  }
+  for i = 0; i < host_port[0].length(); i = i + 1 {
+    let c = host_port[0][i].to_int()
+    if !((c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
+      (c >= 48 && c <= 57) || c == 45 || c == 46) {
+      return false
     }
-    let host_port = split_to_array(authority, ":")
+  }
+  if host_port.length() == 2 {
+    if host_port[1] == "" { return false }
+    for i = 0; i < host_port[1].length(); i = i + 1 {
+      let c = host_port[1][i].to_int()
+      if c < 48 || c > 57 { return false }
+    }
+    let port = @string.parse_int(host_port[1].view()) catch { _ => 0 }
+    if port < 1 || port > 65535 { return false }
+  }
+  if scheme == "http" {
     if host_port.length() != 2 ||
       (host_port[0] != "localhost" && host_port[0] != "127.0.0.1") {
       return false
     }
-    let port = @string.parse_int(host_port[1].view()) catch { _ => 0 }
-    return port > 0 && port <= 65535
+    return true
   }
   true
 }
 
 ///|
-fn send_payload(payload : MetricPayload, url : String, token : String) -> Bool {
-  post(@utf8.encode(url), @utf8.encode(token), @utf8.encode(payload.json())) ==
-  1
+fn state_dir() -> String {
+  env("CFMON_STATE_DIR")
+}
+
+///|
+fn send_payload(payload : MetricPayload, url : String, dir : String) -> Int {
+  signed_post(@utf8.encode(url), @utf8.encode(dir), @utf8.encode(payload.json()))
+}
+
+///|
+fn pair_body(host : String) -> String {
+  "{\"host\":\"\{host}\",\"os\":\"linux\"}"
+}
+
+///|
+fn ensure_paired(pair_url : String, dir : String, host : String, once : Bool) -> Bool {
+  let fp = fingerprint(@utf8.encode(dir))
+  if fp == "" {
+    eprintln("unable to create or read the private key in cfmon state directory")
+    process_exit(2)
+  }
+  eprintln("cfmon key fingerprint: \{fp}")
+  eprintln("Dashboardでこのfingerprintを確認して承認してください")
+  let body = pair_body(host)
+  while true {
+    let status = signed_post(@utf8.encode(pair_url), @utf8.encode(dir), @utf8.encode(body))
+    if status == 200 {
+      return true
+    }
+    if status == 403 {
+      eprintln("pairing was rejected (the key may be revoked); check Dashboard status")
+      process_exit(2)
+    }
+    if status != 202 {
+      eprintln("failed to check cfmon pairing status (HTTP \{status})")
+      if once {
+        process_exit(1)
+      }
+    }
+    if once {
+      eprintln("pairing is pending; approve the fingerprint, then run again")
+      process_exit(2)
+    }
+    ignore(sleep_seconds(10))
+  }
+  false
 }
 
 ///|
@@ -96,25 +155,27 @@ fn run_agent() -> Unit {
     process_exit(2)
   }
   let url = env("CFMON_URL")
-  let token = env("CFMON_TOKEN")
-  if !print_only &&
-    (
-      !valid_url(url) ||
-      has_newline(url) ||
-      token == "" ||
-      token.length() > 4000 ||
-      has_newline(token)
-    ) {
-    eprintln(
-      "invalid CFMON_URL or CFMON_TOKEN; use HTTPS or loopback HTTP and a nonempty token",
-    )
+  if !print_only && (!valid_url(url, "ingest") || has_newline(url)) {
+    eprintln("invalid CFMON_URL; use https://.../api/v1/ingest or loopback HTTP with a port")
     process_exit(2)
   }
   let mut previous_cpu = current_cpu()
   let mut previous_net = current_network()
   let mut previous_time = monotonic()
   let mut sent = false
+  let dir = state_dir()
+  let pair_url = url.replace(old="/api/v1/ingest", new="/api/v1/pair")
+  let mut paired = false
   while !once || !sent {
+    if !print_only && !paired {
+      let host = env("CFMON_HOST")
+      let pair_host = if host == "" { hostname() } else { host }
+      if !valid_host(pair_host) {
+        eprintln("hostname must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+        process_exit(2)
+      }
+      paired = ensure_paired(pair_url, dir, pair_host, once)
+    }
     if !once && sent {
       ignore(sleep_seconds(interval))
     }
@@ -131,11 +192,14 @@ fn run_agent() -> Unit {
       println(payload.json())
       process_exit(0)
     }
-    if !send_payload(payload, url, token) {
-      eprintln("failed to send metrics")
-      if once {
-        process_exit(1)
-      }
+    let status = send_payload(payload, url, dir)
+    if status == 403 {
+      eprintln("metric request was rejected; check Dashboard approval status")
+      process_exit(2)
+    }
+    if status < 200 || status >= 300 {
+      eprintln("failed to send metrics (HTTP \{status})")
+      if once { process_exit(1) }
     }
     sent = true
     previous_cpu = current_cpu()
@@ -149,9 +213,10 @@ test "host ids and HTTP destinations are constrained" {
   assert_true(valid_host("bronya.example-1"))
   assert_false(valid_host("host\""))
   assert_false(valid_host("-bronya"))
-  assert_true(valid_url("https://cfmon.example.com/api/v1/ingest"))
-  assert_true(valid_url("http://127.0.0.1:8787/api/v1/ingest"))
-  assert_false(valid_url("http://localhost.evil.com/api/v1/ingest"))
-  assert_false(valid_url("http://localhost:80@evil.com/api/v1/ingest"))
-  assert_false(valid_url("http://example.com/api/v1/ingest"))
+  assert_true(valid_url("https://cfmon.example.com/api/v1/ingest", "ingest"))
+  assert_true(valid_url("http://127.0.0.1:8787/api/v1/ingest", "ingest"))
+  assert_false(valid_url("http://localhost.evil.com/api/v1/ingest", "ingest"))
+  assert_false(valid_url("http://localhost:80@evil.com/api/v1/ingest", "ingest"))
+  assert_false(valid_url("http://localhost/api/v1/ingest", "ingest"))
+  assert_false(valid_url("http://example.com/api/v1/ingest", "ingest"))
 }

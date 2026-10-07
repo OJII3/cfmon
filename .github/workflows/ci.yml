@@ -29,3 +29,7 @@ jobs:
         run: |
           nix develop -c sh -c 'cd agent && moon check --target native && moon test --target native && moon build --target native'
           nix develop -c sh -c 'cd agent && moon run src --target native -- --print'
+      - name: Test browser setup orchestration
+        run: nix develop -c node --test scripts/setup-cloudflare.test.mjs
+      - name: Test native Agent pairing with local D1
+        run: nix develop -c npm run test:pairing

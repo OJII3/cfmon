@@ -1,9 +1,15 @@
 #define _GNU_SOURCE
 #include <curl/curl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
@@ -12,6 +18,7 @@
 static char *to_c_string(moonbit_bytes_t bytes) {
   int32_t n = Moonbit_array_length(bytes);
   char *s = malloc((size_t)n + 1);
+  if (!s) return NULL;
   memcpy(s, bytes, (size_t)n);
   s[n] = '\0';
   return s;
@@ -25,13 +32,26 @@ static moonbit_string_t from_ascii(const char *s) {
 }
 
 static size_t discard_body(char *ptr, size_t size, size_t nmemb, void *userdata) {
+  (void)ptr; (void)userdata;
   return size * nmemb;
+}
+
+static int create_parent_dirs(char *path) {
+  for (char *p = path + 1; *p; ++p) {
+    if (*p != '/') continue;
+    *p = '\0';
+    if (mkdir(path, 0700) != 0 && errno != EEXIST) { *p = '/'; return 0; }
+    struct stat st;
+    if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode)) { *p = '/'; return 0; }
+    *p = '/';
+  }
+  return 1;
 }
 
 #define MAX_PROC 65536
 moonbit_string_t cfmon_read_file(moonbit_bytes_t path) {
   char *cpath = to_c_string(path);
-  FILE *f = fopen(cpath, "r");
+  FILE *f = cpath ? fopen(cpath, "r") : NULL;
   free(cpath);
   moonbit_decref(path);
   if (!f) return from_ascii("");
@@ -44,7 +64,7 @@ moonbit_string_t cfmon_read_file(moonbit_bytes_t path) {
 
 moonbit_string_t cfmon_getenv(moonbit_bytes_t key) {
   char *ckey = to_c_string(key);
-  const char *v = getenv(ckey);
+  const char *v = ckey ? getenv(ckey) : NULL;
   char copy[4096];
   snprintf(copy, sizeof(copy), "%s", v ? v : "");
   free(ckey);
@@ -72,34 +92,152 @@ double cfmon_disk_used(void) {
   return 1.0 - (double)s.f_bavail / (double)s.f_blocks;
 }
 
-int cfmon_post(moonbit_bytes_t url, moonbit_bytes_t token, moonbit_bytes_t body) {
-  char *curl_url = to_c_string(url), *curl_token = to_c_string(token), *curl_body = to_c_string(body);
+static int make_state_dir(const char *override, char *out, size_t cap) {
+  const char *home = getenv("HOME");
+  if (override && *override) {
+    if (override[0] != '/') return 0;
+    if (snprintf(out, cap, "%s", override) >= (int)cap) return 0;
+  } else if (getenv("XDG_STATE_HOME") && getenv("XDG_STATE_HOME")[0] == '/') {
+    if (snprintf(out, cap, "%s/cfmon", getenv("XDG_STATE_HOME")) >= (int)cap) return 0;
+  } else {
+    if (!home || home[0] != '/' || snprintf(out, cap, "%s/.local/state/cfmon", home) >= (int)cap) return 0;
+  }
+  if (!create_parent_dirs(out)) return 0;
+  if (mkdir(out, 0700) != 0 && errno != EEXIST) return 0;
+  struct stat st;
+  if (lstat(out, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid()) return 0;
+  if ((st.st_mode & 077) != 0 && chmod(out, 0700) != 0) return 0;
+  if (lstat(out, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 077) != 0) return 0;
+  return 1;
+}
+
+static int key_path(const char *state_arg, char *dir, size_t cap, char *path, size_t path_cap) {
+  if (!make_state_dir(state_arg, dir, cap)) return 0;
+  if (snprintf(path, path_cap, "%s/agent.ed25519", dir) >= (int)path_cap) return 0;
+  return 1;
+}
+
+static int load_or_create_key(const char *state_arg, unsigned char priv[32], unsigned char pub[32]) {
+  char dir[PATH_MAX], path[PATH_MAX];
+  if (!key_path(state_arg, dir, sizeof(dir), path, sizeof(path))) return 0;
+  int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0 && errno == ENOENT) {
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, NULL);
+    EVP_PKEY *key = NULL;
+    size_t priv_len = 32, pub_len = 32;
+    int ok = ctx && EVP_PKEY_keygen_init(ctx) > 0 && EVP_PKEY_keygen(ctx, &key) > 0 &&
+      EVP_PKEY_get_raw_private_key(key, priv, &priv_len) > 0 && EVP_PKEY_get_raw_public_key(key, pub, &pub_len) > 0;
+    EVP_PKEY_free(key); EVP_PKEY_CTX_free(ctx);
+    if (!ok || priv_len != 32 || pub_len != 32) return 0;
+    char temp_path[PATH_MAX];
+    if (snprintf(temp_path, sizeof(temp_path), "%s.tmp.XXXXXX", path) >= (int)sizeof(temp_path)) {
+      OPENSSL_cleanse(priv, 32); return 0;
+    }
+    fd = mkstemp(temp_path);
+    if (fd < 0) { OPENSSL_cleanse(priv, 32); return 0; }
+    (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    size_t off = 0;
+    while (off < 32) {
+      ssize_t n = write(fd, priv + off, 32 - off);
+      if (n <= 0) { close(fd); unlink(temp_path); OPENSSL_cleanse(priv, 32); return 0; }
+      off += (size_t)n;
+    }
+    int write_ok = fsync(fd) == 0 && fchmod(fd, 0600) == 0;
+    if (close(fd) != 0) write_ok = 0;
+    if (!write_ok) { unlink(temp_path); OPENSSL_cleanse(priv, 32); return 0; }
+    if (link(temp_path, path) != 0) {
+      int existed = errno == EEXIST;
+      unlink(temp_path); OPENSSL_cleanse(priv, 32);
+      return existed ? load_or_create_key(state_arg, priv, pub) : 0;
+    }
+    unlink(temp_path);
+    return 1;
+  }
+  if (fd < 0) return 0;
+  struct stat st;
+  int ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() && (st.st_mode & 0777) == 0600 && st.st_size == 32;
+  size_t off = 0;
+  while (ok && off < 32) {
+    ssize_t n = read(fd, priv + off, 32 - off);
+    if (n <= 0) { ok = 0; break; }
+    off += (size_t)n;
+  }
+  close(fd);
+  if (!ok) { OPENSSL_cleanse(priv, 32); return 0; }
+  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, priv, 32);
+  size_t pub_len = 32;
+  ok = key && EVP_PKEY_get_raw_public_key(key, pub, &pub_len) > 0 && pub_len == 32;
+  EVP_PKEY_free(key);
+  if (!ok) OPENSSL_cleanse(priv, 32);
+  return ok;
+}
+
+static void hex(const unsigned char *in, size_t n, char *out) {
+  static const char digits[] = "0123456789abcdef";
+  for (size_t i = 0; i < n; ++i) { out[2*i] = digits[in[i] >> 4]; out[2*i+1] = digits[in[i] & 15]; }
+  out[2*n] = 0;
+}
+
+moonbit_string_t cfmon_fingerprint(moonbit_bytes_t state_bytes) {
+  char *state = to_c_string(state_bytes);
+  unsigned char priv[32], pub[32], digest[SHA256_DIGEST_LENGTH];
+  char result[65] = "";
+  if (state && load_or_create_key(state, priv, pub)) {
+    SHA256(pub, sizeof(pub), digest);
+    hex(digest, sizeof(digest), result);
+    OPENSSL_cleanse(priv, sizeof(priv));
+  }
+  free(state); moonbit_decref(state_bytes);
+  return from_ascii(result);
+}
+
+int cfmon_signed_post(moonbit_bytes_t url_bytes, moonbit_bytes_t state_bytes, moonbit_bytes_t body_bytes) {
+  char *url = to_c_string(url_bytes), *state = to_c_string(state_bytes), *body = to_c_string(body_bytes);
+  int status = -1;
+  unsigned char priv[32], pub[32], nonce[16], sig[64];
+  if (!url || !state || !body || strlen(body) > 65536 || !load_or_create_key(state, priv, pub) || RAND_bytes(nonce, sizeof(nonce)) != 1) goto done;
+  char pubhex[65], noncehex[33], sighex[129], ts[32];
+  hex(pub, 32, pubhex); hex(nonce, 16, noncehex);
+  snprintf(ts, sizeof(ts), "%lld", (long long)time(NULL));
+  const char *path = strstr(url, "://");
+  path = path ? strchr(path + 3, '/') : NULL;
+  if (!path || strchr(path, '?') || strchr(path, '#') ||
+      (strcmp(path, "/api/v1/pair") != 0 && strcmp(path, "/api/v1/ingest") != 0)) goto done;
+  size_t signed_len = 5 + strlen(path) + 1 + strlen(ts) + 1 + strlen(noncehex) + 1 + strlen(body);
+  char *signed_data = malloc(signed_len + 1);
+  if (!signed_data) goto done;
+  snprintf(signed_data, signed_len + 1, "POST\n%s\n%s\n%s\n%s", path, ts, noncehex, body);
+  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, priv, sizeof(priv));
+  EVP_MD_CTX *md = EVP_MD_CTX_new(); size_t sig_len = sizeof(sig);
+  int ok = key && md && EVP_DigestSignInit(md, NULL, NULL, NULL, key) > 0 && EVP_DigestSign(md, sig, &sig_len, (unsigned char *)signed_data, signed_len) > 0 && sig_len == 64;
+  EVP_MD_CTX_free(md); EVP_PKEY_free(key); OPENSSL_cleanse(signed_data, signed_len); free(signed_data);
+  if (!ok) goto done;
+  hex(sig, 64, sighex);
   CURL *curl = curl_easy_init();
-  if (!curl) { free(curl_url); free(curl_token); free(curl_body); moonbit_decref(url); moonbit_decref(token); moonbit_decref(body); return 0; }
+  if (!curl) goto done;
   struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");
-  char auth[4096];
-  if (strchr(curl_token, '\r') || strchr(curl_token, '\n') || strlen(curl_token) > 4000) {
-    curl_slist_free_all(headers); curl_easy_cleanup(curl); free(curl_url); free(curl_token); free(curl_body);
-    moonbit_decref(url); moonbit_decref(token); moonbit_decref(body); return 0;
-  }
-  snprintf(auth, sizeof(auth), "Authorization: Bearer %s", curl_token);
-  headers = curl_slist_append(headers, auth);
-  curl_easy_setopt(curl, CURLOPT_URL, curl_url);
+  char header[256];
+  snprintf(header, sizeof(header), "X-Cfmon-Key: %s", pubhex); headers = curl_slist_append(headers, header);
+  snprintf(header, sizeof(header), "X-Cfmon-Timestamp: %s", ts); headers = curl_slist_append(headers, header);
+  snprintf(header, sizeof(header), "X-Cfmon-Nonce: %s", noncehex); headers = curl_slist_append(headers, header);
+  snprintf(header, sizeof(header), "X-Cfmon-Signature: %s", sighex); headers = curl_slist_append(headers, header);
+  curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, curl_body);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(curl_body));
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_body);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_NOPROXY, "localhost,127.0.0.1");
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
   CURLcode result = curl_easy_perform(curl);
-  long status = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-  curl_slist_free_all(headers);
-  curl_easy_cleanup(curl);
-  free(curl_url); free(curl_token); free(curl_body);
-  moonbit_decref(url); moonbit_decref(token); moonbit_decref(body);
-  return result == CURLE_OK && status >= 200 && status < 300;
+  long code = 0; curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+  if (result == CURLE_OK) status = (int)code;
+  curl_slist_free_all(headers); curl_easy_cleanup(curl);
+ done:
+  OPENSSL_cleanse(priv, sizeof(priv));
+  free(url); free(state); free(body);
+  moonbit_decref(url_bytes); moonbit_decref(state_bytes); moonbit_decref(body_bytes);
+  return status;
 }

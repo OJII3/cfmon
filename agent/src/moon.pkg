@@ -8,5 +8,5 @@ import {
 
 options(
   "native-stub": [ "linux.c" ],
-  link: { "native": { "cc-link-flags": "-lcurl" } },
+  link: { "native": { "cc-link-flags": "-lcurl -lcrypto" } },
 )

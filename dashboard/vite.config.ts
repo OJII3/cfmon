@@ -5,7 +5,18 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8787',
+      '/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on('proxyReq', (outgoing, request) => {
+            const origin = request.headers.origin;
+            if (origin && new URL(origin).host === request.headers.host) {
+              outgoing.setHeader('origin', 'http://localhost:8787');
+            }
+          });
+        },
+      },
     },
   },
 });

@@ -29,6 +29,7 @@
             pkgs.moonbit-bin.latest
             pkgs.nodejs
             pkgs.curl
+            pkgs.openssl
             pkgs.pkg-config
           ];
         };

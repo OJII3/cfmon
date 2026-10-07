@@ -9,3 +9,6 @@ dist/
 agent/_build/
 agent/target/
 *.tsbuildinfo
+worker/wrangler.local.json
+worker/wrangler.dev.json
+.cfmon/
