@@ -15,6 +15,8 @@ Linux host → MoonBit Agent → 署名付き HTTPS → Worker → Analytics Eng
 - `dashboard/`: Cloudflare Access でログインして Agent を承認。ホスト一覧、数値カード、CPU・メモリ・ネットワークグラフを表示します。
 - D1: 公開鍵と承認状態、再送検知用 nonce を保存します。秘密鍵は保存しません。
 
+Cloudflare の設定・リソース作成・デプロイには `cf` CLI を使います。Analytics SQL binding を含む `cloudflare.config.ts` に移行済みで、初回認証は1回です。ビルドは `cf` がWrangler bundlerへ委譲します。
+
 Linux 専用です。温度、systemd 状態、アラート、R2 はまだ含みません。
 
 ## 初回セットアップ
@@ -28,11 +30,11 @@ nix develop
 npm run setup
 ```
 
-初回は `cf` と Wrangler それぞれで1回ずつ、合計2回の認可が必要です。両 CLI は別々に OAuth 資格情報を保存し、ログイン状態を共有しません。認可 URL と確認コードをターミナルに表示するので、ローカル・SSH・コンテナのどこからでも、別端末のブラウザで開いて承認できます。各コードの有効時間内に承認してください。複数のアカウントがある場合だけ、表示された一覧から使用するアカウントを選びます。
+初回は `cf` で1回だけ認可します。URL と確認コードが表示されるので、ローカル・SSH・コンテナのどこからでも、別端末のブラウザで開いて承認できます。コードの有効時間内に承認してください。複数のアカウントがある場合だけ、表示された一覧から使用するアカウントを選びます。
 
 メールアドレス、アカウント ID、Worker URL、Access チームドメイン、AUD は自動取得します。スクリプトが D1 の作成・マイグレーション、Dashboard ビルド、Worker デプロイ、Access アプリと所有者メールの許可ポリシーを設定します。メールの One-time PIN をログイン方法に使用し、Agent 用の2パスだけを Access の対象外にします。公開設定もシークレットも手入力しません。
 
-公開設定は `worker/wrangler.local.json`、接続先は `.cfmon/deployment.json` に保存します。どちらも Git には含めません。OAuth 認証情報は各 CLI が管理します。Access が未設定・JWT が不正な場合、閲覧と承認 API は拒否されます。実アカウントでの初回実行には Analytics Engine の有効化と Cloudflare 側の利用権限が必要です。
+公開設定は `worker/.env`、接続先は `.cfmon/deployment.json` に保存します。どちらも Git には含めません。OAuth 認証情報は `cf` が管理します。Access が未設定・JWT が不正な場合、閲覧と承認 API は拒否されます。実アカウントでの初回実行には Analytics Engine の有効化と Cloudflare 側の利用権限が必要です。
 
 更新時は同じ環境で次の1コマンドです。
 

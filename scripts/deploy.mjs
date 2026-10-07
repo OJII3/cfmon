@@ -7,83 +7,119 @@ import { loginAndSelectAccount, configureAccess } from './setup-cloudflare.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const worker = resolve(root, 'worker');
-const configPath = resolve(worker, 'wrangler.local.json');
+const envPath = resolve(worker, '.env');
 const setup = process.argv.includes('--setup');
 const dryRun = process.argv.includes('--dry-run');
 
-function run(command, args, cwd = worker, capture = false) {
-  const env = { ...process.env };
-  delete env.CLOUDFLARE_API_TOKEN;
-  const result = spawnSync(command, args, {
-    cwd, env, encoding: 'utf8', stdio: capture ? ['inherit', 'pipe', 'inherit'] : 'inherit',
+function run(command, args, cwd, { capture = false, env = process.env } = {}) {
+  const child = spawnSync(command, args, {
+    cwd, env, encoding: 'utf8',
+    stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit',
+    maxBuffer: 4 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} failed (${result.status})`);
-  return result.stdout;
+  if (child.error) throw child.error;
+  if (child.status !== 0) {
+    const details = child.stderr?.trim();
+    throw new Error(`${command} ${args[0]} に失敗しました${details ? `: ${details}` : ''}`);
+  }
+  return capture ? { stdout: child.stdout ?? '', stderr: child.stderr ?? '' } : undefined;
 }
-const wrangler = (args, capture = false) => run('npx', ['--no-install', 'wrangler', ...args], worker, capture);
+
+function runCf(args, options = {}) {
+  const env = { ...process.env, ...options.env };
+  delete env.CLOUDFLARE_API_TOKEN;
+  return run('npx', ['--no-install', 'cf', ...args], worker, { ...options, env });
+}
+
+function unwrap(value) {
+  let current = value;
+  for (let i = 0; i < 3 && current && typeof current === 'object' && 'result' in current; i++) current = current.result;
+  return current;
+}
+
+function parseJson(text, label) {
+  try { return unwrap(JSON.parse(text)); }
+  catch { throw new Error(`${label} の結果を読み取れませんでした`); }
+}
+
+function listOf(value) {
+  const data = unwrap(value);
+  if (Array.isArray(data)) return data;
+  for (const key of ['databases', 'result', 'items']) if (Array.isArray(data?.[key])) return data[key];
+  return [];
+}
+
+async function saveLocalConfig({ accountId, databaseId, teamDomain, aud }) {
+  const rows = [
+    `CLOUDFLARE_ACCOUNT_ID=${accountId}`,
+    `CFMON_D1_ID=${databaseId}`,
+    `CFMON_ACCESS_TEAM_DOMAIN=${teamDomain ?? 'setup-pending.cloudflareaccess.com'}`,
+    `CFMON_ACCESS_AUD=${aud ?? 'setup-pending'}`,
+  ];
+  await writeFile(envPath, `${rows.join('\n')}\n`, { mode: 0o600 });
+}
+
+async function deploy() {
+  const result = runCf(['deploy'], { capture: true });
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  const output = `${result.stdout}\n${result.stderr}`;
+  const url = output.match(/https:\/\/[a-z0-9.-]+\.workers\.dev\b/i)?.[0];
+  if (!url) throw new Error('デプロイ結果から Worker URL を取得できませんでした');
+  return url;
+}
 
 async function main() {
   if (setup && dryRun) throw new Error('--setup と --dry-run は同時に指定できません');
-  run('npm', ['ci']);
-  let ownerEmail;
-  let config = JSON.parse(await readFile(resolve(worker, 'wrangler.jsonc'), 'utf8'));
+  run('npm', ['ci'], worker);
   if (setup) {
     const { accountId, email } = await loginAndSelectAccount();
-    ownerEmail = email;
-    config.account_id = accountId;
-    config.vars = {};
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    wrangler(['login', '--device', '--browser=false']);
-    const databases = JSON.parse(wrangler(['d1', 'list', '--json', '--config', configPath], true));
-    const name = config.d1_databases[0].database_name;
-    const existing = databases.find((database) => database.name === name);
-    if (existing) {
-      config.d1_databases[0].database_id = existing.uuid;
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    } else {
-      const binding = config.d1_databases[0];
-      config.d1_databases = [];
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-      wrangler(['d1', 'create', name, '--binding', binding.binding, '--update-config', '--config', configPath]);
-      config = JSON.parse(await readFile(configPath, 'utf8'));
-      config.d1_databases[0].migrations_dir = binding.migrations_dir;
-      await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const localEnv = { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId };
+    delete localEnv.CLOUDFLARE_API_TOKEN;
+    const databaseResult = runCf(['d1', 'list', '--per-page', '100'], { capture: true, env: localEnv });
+    const databases = listOf(parseJson(databaseResult.stdout, 'D1一覧'));
+    const databaseName = 'cfmon-registry';
+    let database = databases.find((item) => item.name === databaseName);
+    if (!database) {
+      const created = runCf(['d1', 'create', '--name', databaseName], { capture: true, env: localEnv });
+      database = parseJson(created.stdout, 'D1作成');
     }
-  } else if (!dryRun) {
-    config = JSON.parse(await readFile(configPath, 'utf8').catch(() => {
+    const databaseId = database?.uuid ?? database?.id;
+    if (typeof databaseId !== 'string' || !databaseId) throw new Error('D1のIDを取得できませんでした');
+    await saveLocalConfig({ accountId, databaseId });
+
+    run('npm', ['ci'], resolve(root, 'dashboard'));
+    run('npm', ['run', 'build'], resolve(root, 'dashboard'));
+    runCf(['d1', 'migrations', 'apply', databaseId, '--dir', 'migrations']);
+    console.log('Worker を初回デプロイしています…');
+    let url = await deploy();
+    const { teamDomain, aud } = await configureAccess({ accountId, email, hostname: url });
+    await saveLocalConfig({ accountId, databaseId, teamDomain, aud });
+    console.log('Access 認証を反映しています…');
+    url = await deploy();
+    await mkdir(resolve(root, '.cfmon'), { recursive: true });
+    await writeFile(resolve(root, '.cfmon/deployment.json'), `${JSON.stringify({ url }, null, 2)}\n`);
+    console.log(`セットアップ完了: ${url}\nAgent 起動: npm run agent`);
+    return;
+  }
+
+  if (!dryRun) {
+    const local = await readFile(envPath, 'utf8').catch(() => {
       throw new Error('初回は npm run setup を実行してください');
-    }));
-    if (config.vars?.DEVELOPMENT) throw new Error('開発用の認証迂回設定をデプロイできません');
-    if (!config.account_id || !config.vars?.ACCESS_TEAM_DOMAIN || !config.vars?.ACCESS_AUD || !config.d1_databases?.[0]?.database_id || /^0+$/.test(config.d1_databases[0].database_id.replaceAll('-', ''))) {
+    });
+    if (!/^CFMON_D1_ID=(?!0+$).+/m.test(local) || !/^CFMON_ACCESS_TEAM_DOMAIN=(?!setup-pending).+/m.test(local) || !/^CFMON_ACCESS_AUD=(?!setup-pending$).+/m.test(local)) {
       throw new Error('セットアップが未完了です。npm run setup を実行してください');
     }
   }
   run('npm', ['ci'], resolve(root, 'dashboard'));
   run('npm', ['run', 'build'], resolve(root, 'dashboard'));
-  if (!dryRun) wrangler(['d1', 'migrations', 'apply', 'REGISTRY', '--remote', '--config', configPath]);
   if (dryRun) {
-    wrangler(['deploy', '--dry-run']);
+    runCf(['deploy', '--dry-run']);
     return;
   }
-  const deploy = () => {
-    const output = wrangler(['deploy', '--config', configPath], true);
-    process.stdout.write(output);
-    const url = output.match(/https:\/\/[a-z0-9.-]+\.workers\.dev\b/i)?.[0];
-    if (!url) throw new Error('デプロイ結果から Worker URL を取得できませんでした');
-    return url;
-  };
-  console.log('Worker をデプロイしています…');
-  let url = deploy();
-  if (setup) {
-    const { teamDomain, aud } = await configureAccess({ accountId: config.account_id, email: ownerEmail, hostname: url });
-    config.vars = { ACCESS_TEAM_DOMAIN: teamDomain, ACCESS_AUD: aud };
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    url = deploy();
-  }
+  const url = await deploy();
   await mkdir(resolve(root, '.cfmon'), { recursive: true });
   await writeFile(resolve(root, '.cfmon/deployment.json'), `${JSON.stringify({ url }, null, 2)}\n`);
-  console.log(`セットアップ完了: ${url}\nAgent 起動: npm run agent`);
 }
 
 main().catch((error) => {

@@ -24,7 +24,7 @@ jobs:
         run: |
           nix develop -c sh -c 'cd worker && npm run typecheck && npm test'
           nix develop -c sh -c 'cd dashboard && npm run build'
-          nix develop -c sh -c 'cd worker && npx wrangler deploy --dry-run'
+          nix develop -c sh -c 'cd worker && npx cf deploy --dry-run'
       - name: Check and build native agent
         run: |
           nix develop -c sh -c 'cd agent && moon check --target native && moon test --target native && moon build --target native'
