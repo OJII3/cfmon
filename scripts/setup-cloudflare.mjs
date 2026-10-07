@@ -171,7 +171,7 @@ export async function loginAndSelectAccount({ runCf = defaultRunCf, selectAccoun
   }
   let email = findEmail(whoami);
   if (!email) {
-    const login = runCf(['auth', 'login'], { env: cliEnv(), interactive: true });
+    const login = runCf(['auth', 'login', '--no-browser'], { env: cliEnv(), interactive: true });
     if (login.status !== 0) throw new Error('Cloudflare OAuth ログインが完了しませんでした。');
     whoami = command(runCf, ['auth', 'whoami']);
     email = findEmail(whoami);

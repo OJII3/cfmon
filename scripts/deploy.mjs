@@ -34,7 +34,7 @@ async function main() {
     config.account_id = accountId;
     config.vars = {};
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    wrangler(['login']);
+    wrangler(['login', '--device', '--browser=false']);
     const databases = JSON.parse(wrangler(['d1', 'list', '--json', '--config', configPath], true));
     const name = config.d1_databases[0].database_name;
     const existing = databases.find((database) => database.name === name);

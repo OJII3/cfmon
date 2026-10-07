@@ -22,7 +22,7 @@ test('logs in through OAuth and selects one listed account without entering meta
       json({ authenticated: false, error: 'Not logged in' }),
       json({ result: { user: { email: 'owner@example.test' } } }),
     ],
-    'auth login': [{ status: 0, stdout: '', stderr: '' }],
+    'auth login --no-browser': [{ status: 0, stdout: '', stderr: '' }],
     'accounts list --per-page 100': [json({ result: [
       { id: 'account-one', name: 'Personal' },
       { id: 'account-two', name: 'Lab' },
