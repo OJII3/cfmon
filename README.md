@@ -54,7 +54,7 @@ npm run deploy -- --dry-run
 npm run agent
 ```
 
-セットアップと同じ環境では保存済みの Worker URL と OS の hostname を自動使用します。別ホストでは公開情報だけを含む `.cfmon/deployment.json` を配置してください。
+セットアップと同じ環境では保存済みの Worker URL と OS の hostname を自動使用します。別ホストでも `npm run setup` を実行できます。同じアカウントの既存 D1 と Access アプリを再利用し、再デプロイして接続先を自動取得します。
 
 Agent は初回に Ed25519 鍵を作り、公開指紋を表示して承認を待ちます。Dashboard にログインし、表示された **SHA-256 指紋が Agent の出力と一致することを確認して承認**してください。ホスト名だけでは承認しないでください。承認後にメトリクスの送信が始まります。
 
