@@ -12,6 +12,7 @@ import {
   Group,
   NavLink,
   Paper,
+  Progress,
   ScrollArea,
   SimpleGrid,
   Stack,
@@ -100,9 +101,9 @@ function App() {
 
   const current = metrics.at(-1);
   const cards = current ? [
-    { label: 'CPU', value: formatPercent(current.cpu) },
-    { label: 'メモリ', value: formatPercent(current.memory) },
-    { label: 'ディスク', value: formatPercent(current.disk) },
+    { label: 'CPU', value: formatPercent(current.cpu), ratio: current.cpu, color: 'teal' },
+    { label: 'メモリ', value: formatPercent(current.memory), ratio: current.memory, color: 'blue' },
+    { label: 'ディスク', value: formatPercent(current.disk), ratio: current.disk, color: 'orange' },
     { label: 'Load 1m', value: current.load1.toFixed(2) },
     { label: '稼働時間', value: formatUptime(current.uptime) },
   ] : [];
@@ -210,8 +211,9 @@ function App() {
         {state === 'ready' && current && <section>
           <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
           <SimpleGrid cols={{ base: 2, md: 3, xl: 5 }} spacing="sm" mt="sm" mb="xl" aria-label="最新メトリクス">
-            {cards.map((card) => <Paper withBorder p="md" key={card.label}>
+            {cards.map((card) => <Paper withBorder p="md" key={card.label} style={{ position: 'relative', paddingBottom: card.ratio === undefined ? undefined : 20 }}>
               <Text size="xs" c="dimmed" mb="xs">{card.label}</Text><Text fw={600} ff="monospace" truncate>{card.value}</Text>
+              {card.ratio !== undefined && <Progress value={Math.max(0, Math.min(100, card.ratio * 100))} color={card.color} size={4} radius={0} aria-label={`${card.label} 使用率 ${card.value}`} style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }} />}
             </Paper>)}
           </SimpleGrid>
           <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail="1 分間隔 · 1 時間" />
