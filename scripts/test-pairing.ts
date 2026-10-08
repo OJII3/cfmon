@@ -22,7 +22,7 @@ async function admin(path, body) {
 try {
   const migration = command('npx', ['--no-install', 'wrangler', 'd1', 'migrations', 'apply', 'REGISTRY', '--local', '--persist-to', temporary], `${root}/worker`);
   assert.equal(migration.status, 0, migration.stderr);
-  server = spawn(process.execPath, ['scripts/dev.mjs', '--ip', '127.0.0.1', '--port', '18887', '--persist-to', temporary], { cwd: root, detached: true, stdio: 'ignore' });
+  server = spawn(process.execPath, ['scripts/dev.ts', '--ip', '127.0.0.1', '--port', '18887', '--persist-to', temporary], { cwd: root, detached: true, stdio: 'ignore' });
   let ready = false;
   for (let i = 0; i < 100; i++) {
     try {

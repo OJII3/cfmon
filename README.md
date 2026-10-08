@@ -121,7 +121,7 @@ npm run dev
 認証の開発用迂回は `DEVELOPMENT=true` かつ loopback URL のリクエストだけに適用します。本番デプロイにこの設定を含めないでください。ローカルでは登録・承認・署名付き送信を検証できますが、Analytics Engine の保存・照会は本番を再現しません。
 
 ```sh
-node --test scripts/setup-cloudflare.test.mjs
+node --test scripts/setup-cloudflare.test.ts
 npm run test:pairing
 (cd worker && npm run typecheck && npm test)
 (cd dashboard && npm run build)
