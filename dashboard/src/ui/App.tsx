@@ -54,7 +54,7 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
 }
 
 function App() {
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => new URLSearchParams(window.location.search).get('host') ?? '');
   const [page, setPage] = useState<'metrics' | 'devices'>('metrics');
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [busyAgent, setBusyAgent] = useState('');
@@ -168,6 +168,9 @@ function App() {
                 navHandlers.close();
                 if (host.id === selectedHost?.id) return;
                 setSelectedId(host.id);
+                const url = new URL(window.location.href);
+                url.searchParams.set('host', host.id);
+                window.history.replaceState(null, '', url);
               }}
             />)}
           </Stack>
