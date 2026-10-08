@@ -32,7 +32,7 @@ npm run setup
 
 初回は `cf` で1回だけ認可します。URL と確認コードが表示されるので、ローカル・SSH・コンテナのどこからでも、別端末のブラウザで開いて承認できます。コードの有効時間内に承認してください。複数のアカウントがある場合だけ、表示された一覧から使用するアカウントを選びます。
 
-メールアドレス、アカウント ID、Worker URL、Access チームドメイン、AUD は自動取得します。active zone がある場合、複数なら一覧から選び、ひとつなら自動選択して `cfmon.<zone>` を Worker の Custom Domain として割り当てます。DNS レコードと証明書は Cloudflare が作成し、`workers.dev` は無効にします。zone がない場合は従来どおり `workers.dev` を使います。
+メールアドレス、アカウント ID、Worker URL、Access チームドメイン、AUD は自動取得します。active zone がある場合、複数なら一覧から選び、ひとつなら自動選択します。続けてサブドメインを入力し、`<入力値>.<zone>` を Worker の Custom Domain に割り当てます。空欄なら `cfmon` を使います。DNS レコードと証明書は Cloudflare が作成し、`workers.dev` は無効にします。zone がない場合は従来どおり `workers.dev` を使います。
 
 スクリプトは D1 の作成・マイグレーション、Dashboard ビルド、Worker デプロイ、Access アプリ設定を行います。既存の reusable Allow policy がある場合は選択でき、全員・One-time PIN だけ・Service Token 全許可の policy は候補から除外します。既存 policy を選ばない場合は、ログイン中のメールアドレスだけを許可する設定を使います。Agent 用の2パスだけを Access の対象外にします。公開設定もシークレットも手入力しません。
 

@@ -93,6 +93,16 @@ async function terminalZoneChoice(zones) {
   return chooseItem(zones, 'Worker に割り当てる zone', (zone) => zone.name);
 }
 
+async function terminalSubdomainChoice(zone) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return 'cfmon';
+  const input = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await input.question(`Worker のサブドメイン [cfmon]（${zone.name} の下）: `);
+  } finally {
+    input.close();
+  }
+}
+
 async function terminalPolicyChoice(choices) {
   return chooseItem(choices, 'Dashboard の Access policy', (choice) => choice.label);
 }
@@ -214,14 +224,19 @@ export async function loginAndSelectAccount({ runCf = defaultRunCf, selectAccoun
 }
 
 /** Pick an active zone and use a predictable hostname without asking for domain text. */
-export async function selectDeploymentDomain({ accountId, runCf = defaultRunCf, selectZone = terminalZoneChoice }) {
+export async function selectDeploymentDomain({ accountId, runCf = defaultRunCf, selectZone = terminalZoneChoice, selectSubdomain = terminalSubdomainChoice }) {
   if (typeof accountId !== 'string' || !accountId) throw new Error('Cloudflare account IDを取得できませんでした。');
   const zones = listOf(command(runCf, ['zones', 'list', '--account-id', accountId, '--status', 'active', '--per-page', '100'], accountId))
     .filter((zone) => typeof zone.name === 'string' && zone.name && zone.status === 'active');
   if (zones.length === 0) return null;
   const zone = zones.length === 1 ? zones[0] : await selectZone(zones);
   if (!zones.some((item) => item.id === zone?.id)) throw new Error('zone が選択されませんでした。');
-  return `cfmon.${zone.name}`;
+  const subdomain = String(await selectSubdomain(zone) ?? '').trim().toLowerCase() || 'cfmon';
+  const labels = subdomain.split('.');
+  if (labels.some((label) => label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)) || `${subdomain}.${zone.name}`.length > 253) {
+    throw new Error('サブドメインは英数字とハイフンで入力してください（各ラベルは英数字で始まり、終わる必要があります）。');
+  }
+  return `${subdomain}.${zone.name}`;
 }
 
 /** Offer reusable Allow policies and retain the current email-only policy as the safe default. */

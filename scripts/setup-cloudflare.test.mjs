@@ -76,6 +76,34 @@ test('selects among multiple active zones without requesting a hostname', async 
   assert.equal(domain, 'cfmon.two.test');
 });
 
+test('lets the user choose a subdomain within the selected zone', async () => {
+  const { runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [
+      { id: 'zone', name: 'example.test', status: 'active' },
+    ] })],
+  });
+  const domain = await selectDeploymentDomain({
+    accountId: 'account-id', runCf,
+    selectSubdomain: async (zone) => {
+      assert.equal(zone.name, 'example.test');
+      return 'metrics.prod';
+    },
+  });
+  assert.equal(domain, 'metrics.prod.example.test');
+});
+
+test('rejects malformed subdomains', async () => {
+  const { runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [
+      { id: 'zone', name: 'example.test', status: 'active' },
+    ] })],
+  });
+  await assert.rejects(selectDeploymentDomain({
+    accountId: 'account-id', runCf,
+    selectSubdomain: async () => 'invalid_name',
+  }), /サブドメイン/);
+});
+
 test('offers existing restrictive Allow policies but excludes everyone and service-token policies', async () => {
   const { runCf } = mockCf({
     'zero-trust access policies list --per-page 100': [json({ result: [
