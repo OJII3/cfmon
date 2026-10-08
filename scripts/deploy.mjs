@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
-import { loginAndSelectAccount, configureAccess } from './setup-cloudflare.mjs';
+import { loginAndSelectAccount, configureAccess, selectDeploymentDomain, selectReusablePolicy } from './setup-cloudflare.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const worker = resolve(root, 'worker');
@@ -49,10 +49,11 @@ function listOf(value) {
   return [];
 }
 
-async function saveLocalConfig({ accountId, databaseId, teamDomain, aud }) {
+async function saveLocalConfig({ accountId, databaseId, customDomain, teamDomain, aud }) {
   const rows = [
     `CLOUDFLARE_ACCOUNT_ID=${accountId}`,
     `CFMON_D1_ID=${databaseId}`,
+    `CFMON_CUSTOM_DOMAIN=${customDomain ?? ''}`,
     `CFMON_ACCESS_TEAM_DOMAIN=${teamDomain ?? 'setup-pending.cloudflareaccess.com'}`,
     `CFMON_ACCESS_AUD=${aud ?? 'setup-pending'}`,
   ];
@@ -68,6 +69,7 @@ async function loadLocalConfig() {
   const config = {
     CLOUDFLARE_ACCOUNT_ID: values.CLOUDFLARE_ACCOUNT_ID,
     CFMON_D1_ID: values.CFMON_D1_ID,
+    CFMON_CUSTOM_DOMAIN: values.CFMON_CUSTOM_DOMAIN,
     CFMON_ACCESS_TEAM_DOMAIN: values.CFMON_ACCESS_TEAM_DOMAIN,
     CFMON_ACCESS_AUD: values.CFMON_ACCESS_AUD,
   };
@@ -79,6 +81,7 @@ async function deploy() {
   const result = runCf(['deploy'], { capture: true });
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
+  if (process.env.CFMON_CUSTOM_DOMAIN) return `https://${process.env.CFMON_CUSTOM_DOMAIN}`;
   const output = `${result.stdout}\n${result.stderr}`;
   const url = output.match(/https:\/\/[a-z0-9.-]+\.workers\.dev\b/i)?.[0];
   if (!url) throw new Error('デプロイ結果から Worker URL を取得できませんでした');
@@ -94,6 +97,8 @@ async function main() {
       process.env.CLOUDFLARE_ACCOUNT_ID = previous.match(/^CLOUDFLARE_ACCOUNT_ID=(.+)$/m)?.[1] ?? '';
     }
     const { accountId, email } = await loginAndSelectAccount();
+    const customDomain = await selectDeploymentDomain({ accountId });
+    const accessPolicy = await selectReusablePolicy({ accountId });
     const localEnv = { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId };
     delete localEnv.CLOUDFLARE_API_TOKEN;
     const databaseResult = runCf(['d1', 'list', '--per-page', '100'], { capture: true, env: localEnv });
@@ -106,7 +111,7 @@ async function main() {
     }
     const databaseId = database?.uuid ?? database?.id;
     if (typeof databaseId !== 'string' || !databaseId) throw new Error('D1のIDを取得できませんでした');
-    await saveLocalConfig({ accountId, databaseId });
+    await saveLocalConfig({ accountId, databaseId, customDomain });
     await loadLocalConfig();
 
     run('npm', ['ci'], resolve(root, 'dashboard'));
@@ -114,8 +119,8 @@ async function main() {
     runCf(['d1', 'migrations', 'apply', databaseId, '--dir', 'migrations']);
     console.log('Worker を初回デプロイしています…');
     let url = await deploy();
-    const { teamDomain, aud } = await configureAccess({ accountId, email, hostname: url });
-    await saveLocalConfig({ accountId, databaseId, teamDomain, aud });
+    const { teamDomain, aud } = await configureAccess({ accountId, email, hostname: url, accessPolicy });
+    await saveLocalConfig({ accountId, databaseId, customDomain, teamDomain, aud });
     await loadLocalConfig();
     console.log('Access 認証を反映しています…');
     url = await deploy();

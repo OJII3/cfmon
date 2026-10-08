@@ -44,7 +44,7 @@ function listOf(value) {
   const result = resultOf(value);
   if (Array.isArray(result)) return result;
   if (result && typeof result === 'object') {
-    for (const key of ['accounts', 'identity_providers', 'apps', 'applications', 'items']) {
+    for (const key of ['accounts', 'zones', 'policies', 'identity_providers', 'apps', 'applications', 'items']) {
       if (Array.isArray(result[key])) return result[key];
     }
   }
@@ -66,23 +66,35 @@ async function chooseAccount(accounts, choose) {
   return account;
 }
 
-async function terminalAccountChoice(accounts) {
+async function chooseItem(items, question, label) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error('複数のCloudflare accountがあります。対話端末からセットアップを実行してください。');
+    throw new Error(`${question}を選択するため、対話端末からセットアップを実行してください。`);
   }
-  process.stdout.write('使用するCloudflare accountを選択してください:\n');
-  accounts.forEach((account, index) => process.stdout.write(`  ${index + 1}. ${account.name ?? account.id}\n`));
+  process.stdout.write(`${question}を選択してください:\n`);
+  items.forEach((item, index) => process.stdout.write(`  ${index + 1}. ${label(item)}\n`));
   const input = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await input.question('番号: ');
     const index = Number(answer) - 1;
-    if (!Number.isInteger(index) || index < 0 || index >= accounts.length) {
-      throw new Error('account の選択番号が正しくありません。');
+    if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+      throw new Error(`${question}の選択番号が正しくありません。`);
     }
-    return accounts[index];
+    return items[index];
   } finally {
     input.close();
   }
+}
+
+async function terminalAccountChoice(accounts) {
+  return chooseItem(accounts, '使用するCloudflare account', (account) => account.name ?? account.id);
+}
+
+async function terminalZoneChoice(zones) {
+  return chooseItem(zones, 'Worker に割り当てる zone', (zone) => zone.name);
+}
+
+async function terminalPolicyChoice(choices) {
+  return chooseItem(choices, 'Dashboard の Access policy', (choice) => choice.label);
 }
 
 function cliEnv(accountId) {
@@ -107,8 +119,8 @@ function normalizedHostname(input) {
   let url;
   try { url = new URL(input.includes('://') ? input : `https://${input}`); }
   catch { throw new Error('Worker のURLをCloudflare Accessに設定できませんでした。'); }
-  if (url.protocol !== 'https:' || !url.hostname.endsWith('.workers.dev') || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('WorkerのHTTPS workers.dev URLを指定してください。');
+  if (url.protocol !== 'https:' || url.port || !url.hostname.includes('.') || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('WorkerのHTTPS URLを指定してください。');
   }
   return url.hostname;
 }
@@ -127,7 +139,7 @@ function managedPolicy(email) {
   };
 }
 
-function appBody(app, { hostname, email, idpId }) {
+function appBody(app, { hostname, email, accountId, idpId, idpIds, accessPolicy }) {
   const body = app ? { ...app } : {};
   const destinations = Array.isArray(body.destinations) ? [...body.destinations] : [];
   const targetIndex = destinations.findIndex((destination) => destination.type === 'public' && destination.uri === hostname);
@@ -142,7 +154,22 @@ function appBody(app, { hostname, email, idpId }) {
   if (targetIndex === -1) destinations.push(target);
   else destinations[targetIndex] = target;
 
-  const policies = Array.isArray(body.policies) ? body.policies.filter((policy) => policy.name !== 'cfmon-owner') : [];
+  const currentPolicies = Array.isArray(body.policies) ? body.policies : [];
+  const reusablePolicies = currentPolicies.filter((policy) => typeof policy === 'string' || policy.account_id);
+  const inlinePolicies = currentPolicies.filter((policy) => typeof policy === 'object' && !policy.account_id);
+  let policies;
+  if (accessPolicy) {
+    const unrelatedInline = inlinePolicies.filter((policy) => policy.name !== 'cfmon-owner');
+    if (unrelatedInline.length > 0) {
+      throw new Error('既存の個別Access policyを保持できないため、既存のpolicy構成を確認してください。');
+    }
+    policies = [{ id: accessPolicy.id, account_id: accountId, precedence: 1 }];
+  } else {
+    if (reusablePolicies.length > 0) {
+      throw new Error('既存のreusable Access policyがあります。セットアップ時に使用するpolicyを選択してください。');
+    }
+    policies = inlinePolicies.filter((policy) => policy.name !== 'cfmon-owner');
+  }
   const existingBroadAllow = policies.some((policy) => policy.decision === 'allow' && (policy.include ?? []).some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule));
   if (existingBroadAllow) {
     throw new Error('既存のcfmon Access appに全ユーザー許可policyがあります。既存policyを確認してから再実行してください。');
@@ -155,8 +182,8 @@ function appBody(app, { hostname, email, idpId }) {
     type: 'self_hosted',
     domain: hostname,
     destinations,
-    allowed_idps: [idpId],
-    policies: [...policies, managedPolicy(email)],
+    allowed_idps: accessPolicy ? idpIds : [idpId],
+    policies: accessPolicy ? policies : [...policies, managedPolicy(email)],
     session_duration: '24h',
   };
 }
@@ -186,8 +213,40 @@ export async function loginAndSelectAccount({ runCf = defaultRunCf, selectAccoun
   return { accountId: account.id, email };
 }
 
+/** Pick an active zone and use a predictable hostname without asking for domain text. */
+export async function selectDeploymentDomain({ accountId, runCf = defaultRunCf, selectZone = terminalZoneChoice }) {
+  if (typeof accountId !== 'string' || !accountId) throw new Error('Cloudflare account IDを取得できませんでした。');
+  const zones = listOf(command(runCf, ['zones', 'list', '--account-id', accountId, '--status', 'active', '--per-page', '100'], accountId))
+    .filter((zone) => typeof zone.name === 'string' && zone.name && zone.status === 'active');
+  if (zones.length === 0) return null;
+  const zone = zones.length === 1 ? zones[0] : await selectZone(zones);
+  if (!zones.some((item) => item.id === zone?.id)) throw new Error('zone が選択されませんでした。');
+  return `cfmon.${zone.name}`;
+}
+
+/** Offer reusable Allow policies and retain the current email-only policy as the safe default. */
+export async function selectReusablePolicy({ accountId, runCf = defaultRunCf, selectPolicy = terminalPolicyChoice }) {
+  if (typeof accountId !== 'string' || !accountId) throw new Error('Cloudflare account IDを取得できませんでした。');
+  const policies = listOf(command(runCf, ['zero-trust', 'access', 'policies', 'list', '--per-page', '100'], accountId));
+  const safePolicies = policies.filter((policy) =>
+    typeof policy.id === 'string' && policy.id && typeof policy.name === 'string' &&
+    policy.decision === 'allow' &&
+    Array.isArray(policy.include) && policy.include.length > 0 &&
+    !policy.include.some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule || 'login_method' in rule),
+  );
+  if (safePolicies.length === 0) return null;
+  const choices = [
+    { id: null, label: 'ログイン中のメールアドレスだけを許可（推奨）' },
+    ...safePolicies.map((policy) => ({ id: policy.id, label: `${policy.name}（Allow）`, policy })),
+  ];
+  const selected = await selectPolicy(choices);
+  const choice = choices.find((item) => item.id === selected?.id || item.id === selected);
+  if (!choice) throw new Error('Access policy が選択されませんでした。');
+  return choice.policy ?? null;
+}
+
 /** Create or reuse only cfmon's Access resources. No token or public value is saved. */
-export async function configureAccess({ accountId, email, hostname, runCf = defaultRunCf }) {
+export async function configureAccess({ accountId, email, hostname, accessPolicy = null, runCf = defaultRunCf }) {
   if (typeof accountId !== 'string' || !accountId || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('Cloudflare OAuth account情報を取得できませんでした。');
   }
@@ -214,6 +273,7 @@ export async function configureAccess({ accountId, email, hostname, runCf = defa
     idp = resultOf(call(['zero-trust', 'identity-providers', 'create', '--body', JSON.stringify({ name: 'cfmon-email', type: 'onetimepin' })]));
   }
   if (typeof idp?.id !== 'string' || !idp.id) throw new Error('Cloudflare Access email identity provider を取得できませんでした。');
+  const idpIds = [...new Set([...providers.map((provider) => provider.id), idp.id].filter(Boolean))];
 
   const apps = listOf(call(['zero-trust', 'access', 'applications', 'list', '--domain', hostname, '--exact', '--per-page', '100']));
   const matches = apps.filter((app) => app.domain === hostname || (app.destinations ?? []).some((destination) => destination.uri === hostname));
@@ -224,10 +284,10 @@ export async function configureAccess({ accountId, email, hostname, runCf = defa
   }
   let response;
   if (!app) {
-    response = resultOf(call(['zero-trust', 'access', 'applications', 'create', '--body', JSON.stringify(appBody(null, { hostname, email, idpId: idp.id }))]));
+    response = resultOf(call(['zero-trust', 'access', 'applications', 'create', '--body', JSON.stringify(appBody(null, { hostname, email, accountId, idpId: idp.id, idpIds, accessPolicy }))]));
   } else {
     const detail = resultOf(call(['zero-trust', 'access', 'applications', 'get', app.id]));
-    const body = appBody(detail, { hostname, email, idpId: idp.id });
+    const body = appBody(detail, { hostname, email, accountId, idpId: idp.id, idpIds, accessPolicy });
     response = resultOf(call(['zero-trust', 'access', 'applications', 'update', app.id, '--body', JSON.stringify(body)]));
   }
   const aud = response?.aud ?? response?.aud_tag ?? app?.aud;

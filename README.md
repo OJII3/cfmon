@@ -32,7 +32,9 @@ npm run setup
 
 初回は `cf` で1回だけ認可します。URL と確認コードが表示されるので、ローカル・SSH・コンテナのどこからでも、別端末のブラウザで開いて承認できます。コードの有効時間内に承認してください。複数のアカウントがある場合だけ、表示された一覧から使用するアカウントを選びます。
 
-メールアドレス、アカウント ID、Worker URL、Access チームドメイン、AUD は自動取得します。スクリプトが D1 の作成・マイグレーション、Dashboard ビルド、Worker デプロイ、Access アプリと所有者メールの許可ポリシーを設定します。メールの One-time PIN をログイン方法に使用し、Agent 用の2パスだけを Access の対象外にします。公開設定もシークレットも手入力しません。
+メールアドレス、アカウント ID、Worker URL、Access チームドメイン、AUD は自動取得します。active zone がある場合、複数なら一覧から選び、ひとつなら自動選択して `cfmon.<zone>` を Worker の Custom Domain として割り当てます。DNS レコードと証明書は Cloudflare が作成し、`workers.dev` は無効にします。zone がない場合は従来どおり `workers.dev` を使います。
+
+スクリプトは D1 の作成・マイグレーション、Dashboard ビルド、Worker デプロイ、Access アプリ設定を行います。既存の reusable Allow policy がある場合は選択でき、全員・One-time PIN だけ・Service Token 全許可の policy は候補から除外します。既存 policy を選ばない場合は、ログイン中のメールアドレスだけを許可する設定を使います。Agent 用の2パスだけを Access の対象外にします。公開設定もシークレットも手入力しません。
 
 公開設定は `worker/.env`、接続先は `.cfmon/deployment.json` に保存します。どちらも Git には含めません。OAuth 認証情報は `cf` が管理します。Access が未設定・JWT が不正な場合、閲覧と承認 API は拒否されます。実アカウントでの初回実行には Analytics Engine の有効化と Cloudflare 側の利用権限が必要です。
 

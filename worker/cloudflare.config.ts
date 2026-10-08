@@ -13,6 +13,10 @@ export default defineConfig({
 		name: "cfmon",
 		compatibilityDate: "2026-10-07",
 		entrypoint: "src/index.ts",
+		domains: process.env.CFMON_CUSTOM_DOMAIN
+			? [process.env.CFMON_CUSTOM_DOMAIN]
+			: [],
+		workersDev: !process.env.CFMON_CUSTOM_DOMAIN,
 		assets: {
 			runWorkerFirst: [
 				"/api/*",
