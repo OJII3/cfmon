@@ -2,11 +2,14 @@
   "name": "cfmon",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
-    "setup": "node scripts/deploy.mjs --setup",
-    "deploy": "node scripts/deploy.mjs",
-    "agent": "node scripts/run-agent.mjs",
-    "dev": "node scripts/dev.mjs",
-    "test:pairing": "node scripts/test-pairing.mjs"
+    "setup": "node scripts/deploy.ts --setup",
+    "deploy": "node scripts/deploy.ts",
+    "agent": "node scripts/run-agent.ts",
+    "dev": "node scripts/dev.ts",
+    "test:pairing": "node scripts/test-pairing.ts"
   }
 }

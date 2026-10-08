@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { configureAccess, loginAndSelectAccount, selectDeploymentDomain, selectReusablePolicy } from './setup-cloudflare.mjs';
+import { configureAccess, loginAndSelectAccount, selectDeploymentDomain, selectReusablePolicy } from './setup-cloudflare.ts';
 
 const json = (value) => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
 
