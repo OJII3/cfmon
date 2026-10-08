@@ -55,6 +55,7 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
 
 function App() {
   const [selectedId, setSelectedId] = useState('');
+  const [page, setPage] = useState<'metrics' | 'devices'>('metrics');
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [busyAgent, setBusyAgent] = useState('');
   const [mutationError, setMutationError] = useState('');
@@ -71,6 +72,7 @@ function App() {
   const agentsQuery = useQuery({
     queryKey: ['agents'],
     queryFn: ({ signal }) => fetchAgents(signal),
+    enabled: page === 'devices',
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
@@ -80,7 +82,7 @@ function App() {
   const metricsQuery = useQuery({
     queryKey: ['metrics', selectedHost?.id],
     queryFn: ({ signal }) => fetchMetrics(selectedHost!.id, signal),
-    enabled: !!selectedHost,
+    enabled: !!selectedHost && page === 'metrics',
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
@@ -149,36 +151,42 @@ function App() {
         <Anchor href="#" underline="never" c="inherit"><Group gap="sm"><ThemeIcon color="teal" radius="md">c</ThemeIcon><Box><Text fw={700}>cfmon</Text><Text size="xs" c="dimmed" ff="monospace">HOST MONITOR</Text></Box></Group></Anchor>
       </AppShell.Section>
       <AppShell.Section grow component={ScrollArea}>
-        <Group justify="space-between" mb="xs"><Text size="xs" c="dimmed">インベントリ</Text><Badge variant="light" color="gray">{hosts.length}</Badge></Group>
         <Stack gap={5}>
-          {hosts.map((host) => <NavLink
-            key={host.id}
-            label={host.hostname}
-            description={host.os || 'OS 不明'}
-            active={selectedHost?.id === host.id}
-            leftSection={<ThemeIcon size={8} radius="xl" color="teal" />}
-            onClick={() => {
-              navHandlers.close();
-              if (host.id === selectedHost?.id) return;
-              setSelectedId(host.id);
-            }}
-          />)}
+          <NavLink label="メトリクス" active={page === 'metrics'} onClick={() => { setPage('metrics'); navHandlers.close(); }} />
+          <NavLink label="デバイス管理" active={page === 'devices'} onClick={() => { setPage('devices'); navHandlers.close(); }} />
         </Stack>
+        {page === 'metrics' && <>
+          <Group justify="space-between" mt="xl" mb="xs"><Text size="xs" c="dimmed">ホスト</Text><Badge variant="light" color="gray">{hosts.length}</Badge></Group>
+          <Stack gap={5}>
+            {hosts.map((host) => <NavLink
+              key={host.id}
+              label={host.hostname}
+              description={host.os || 'OS 不明'}
+              active={selectedHost?.id === host.id}
+              leftSection={<ThemeIcon size={8} radius="xl" color="teal" />}
+              onClick={() => {
+                navHandlers.close();
+                if (host.id === selectedHost?.id) return;
+                setSelectedId(host.id);
+              }}
+            />)}
+          </Stack>
+        </>}
       </AppShell.Section>
       <AppShell.Section pt="md"><Group gap="xs"><ThemeIcon size={8} radius="xl" color="teal" /><Text size="xs" c="dimmed">自動更新 30 秒</Text></Group></AppShell.Section>
     </AppShell.Navbar>
 
     <AppShell.Header px={{ base: 'md', sm: 'xl' }}>
       <Group justify="space-between" h="100%">
-        <Group gap="sm"><Burger opened={navOpened} onClick={navHandlers.toggle} hiddenFrom="sm" size="sm" aria-label="ホスト一覧を開く" /><Text size="sm" c="dimmed">システム / ホスト</Text></Group>
-        <Group gap="md"><Text visibleFrom="sm" size="xs" c="dimmed" ff="monospace">{updatedAt ? `更新 ${updatedAt.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '接続中'}</Text>
+        <Group gap="sm"><Burger opened={navOpened} onClick={navHandlers.toggle} hiddenFrom="sm" size="sm" aria-label="ナビゲーションを開く" /><Text size="sm" c="dimmed">システム / {page === 'metrics' ? 'メトリクス' : 'デバイス管理'}</Text></Group>
+        <Group gap="md"><Text visibleFrom="sm" size="xs" c="dimmed" ff="monospace">{page === 'metrics' ? (updatedAt ? `更新 ${updatedAt.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '接続中') : 'Agent の登録と状態'}</Text>
           <Button variant="default" size="xs" onClick={() => void queryClient.invalidateQueries()} leftSection={<Text component="span" c="teal" size="lg">↻</Text>}>更新</Button>
         </Group>
       </Group>
     </AppShell.Header>
 
     <AppShell.Main>
-      <Stack gap="xl">
+      {page === 'metrics' ? <Stack gap="xl">
         <Group justify="space-between" align="center">
           <Box><Text size="xs" c="dimmed" ff="monospace">OVERVIEW / HOSTS</Text><Title order={1}>{selectedHost?.hostname ?? 'ホスト監視'}</Title>
             <Text c="dimmed" size="sm">{selectedHost ? `${selectedHost.os || 'OS 不明'} · 最終受信 ${formatSeen(selectedHost.last_seen)}` : 'ホストの状態をリアルタイムで確認できます。'}</Text>
@@ -207,6 +215,9 @@ function App() {
           <Charts metrics={metrics} />
         </section>}
 
+      </Stack>
+      : <Stack gap="xl">
+        <Box><Text size="xs" c="dimmed" ff="monospace">DEVICE MANAGEMENT / AGENTS</Text><Title order={1}>デバイス管理</Title><Text c="dimmed" size="sm">Agent の追加、承認、登録解除を管理します。</Text></Box>
         {agentError && <Alert color="red" title="Agent 一覧を取得できませんでした" withCloseButton={false}>
           <Text size="sm">{agentError}</Text>
           {agentError === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
@@ -225,13 +236,10 @@ function App() {
               <Button size="xs" onClick={() => void copyAgentInstallCommand()}>{installCopied ? 'コピーしました' : 'コマンドをコピー'}</Button>
             </Group>
             {installCopyError && <Text size="xs" c="red" mt="xs" role="alert">{installCopyError}</Text>}
-            <details>
-              <summary>コマンドと対応環境を表示</summary>
-              <Stack gap="xs" mt="xs">
-                <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{agentInstallCommand}</Code>
-                <Text size="xs" c="dimmed">Linux x86_64 と macOS arm64 に対応しています。監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</Text>
-              </Stack>
-            </details>
+            <Stack gap="xs" mt="xs">
+              <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{agentInstallCommand}</Code>
+              <Text size="xs" c="dimmed">Linux x86_64 と macOS arm64 に対応しています。監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</Text>
+            </Stack>
           </Paper>
         </section>
 
@@ -240,9 +248,7 @@ function App() {
           {!agentError && pendingAgents.length === 0 && <Paper withBorder p="md" mt="sm"><Text c="dimmed" size="sm">承認待ちの Agent はありません。</Text></Paper>}
           <Stack gap="sm" mt="sm">
             {pendingAgents.map((agent) => <Paper withBorder p="lg" key={agent.public_key}>
-              <Group justify="space-between" align="start">
-                <Box><Badge color="yellow" variant="light">承認待ち</Badge><Title order={3} mt="sm">{agent.host}</Title><Text size="xs" c="dimmed">{agent.os || 'OS 不明'} · 登録申請 {formatAge(agent.last_requested_at)}</Text></Box>
-              </Group>
+              <Box><Badge color="yellow" variant="light">承認待ち</Badge><Title order={3} mt="sm">{agent.host}</Title><Text size="xs" c="dimmed">{agent.os || 'OS 不明'} · 登録申請 {formatAge(agent.last_requested_at)}</Text></Box>
               <Text size="xs" c="dimmed" mt="lg" mb="xs">公開鍵の指紋 <Text component="span" size="xs" c="dimmed" ff="monospace">SHA-256</Text></Text>
               <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{formatFingerprint(agent.fingerprint)}</Code>
               <Stack gap="sm" mt="md">
@@ -255,14 +261,14 @@ function App() {
 
         <section>
           <SectionHeading eyebrow="REGISTERED AGENTS" title="登録済み Agent" detail={`${approvedAgents.length} 台`} />
-          {approvedAgents.length > 0 && <Stack gap="xs" mt="sm">{approvedAgents.map((agent) => <Paper withBorder p="sm" key={agent.public_key}>
+          {approvedAgents.length === 0 ? <Paper withBorder p="md" mt="sm"><Text c="dimmed" size="sm">登録済みの Agent はありません。</Text></Paper> : <Stack gap="xs" mt="sm">{approvedAgents.map((agent) => <Paper withBorder p="sm" key={agent.public_key}>
             <Group justify="space-between" wrap="wrap">
               <Group gap="sm" wrap="nowrap"><Badge color="teal" variant="light">承認済み</Badge><Box><Text fw={600} size="sm" truncate>{agent.host}</Text><Text size="xs" c="dimmed">{agent.os || 'OS 不明'} · 最終通信 {formatAge(agent.last_requested_at)}</Text></Box></Group>
               <Button variant="light" color="red" size="xs" disabled={!!busyAgent} loading={busyAgent === agent.public_key} onClick={() => void mutateAgent(agent, 'revoke')}>登録解除</Button>
             </Group>
           </Paper>)}</Stack>}
         </section>
-      </Stack>
+      </Stack>}
       <Text size="xs" c="dimmed" ff="monospace" ta="center" p="lg">cfmon · ホストの状態をシンプルに可視化</Text>
     </AppShell.Main>
   </AppShell>;
