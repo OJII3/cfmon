@@ -230,7 +230,11 @@ int cfmon_signed_post(moonbit_bytes_t url_bytes, moonbit_bytes_t state_bytes, mo
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_NOPROXY, "localhost,127.0.0.1");
+#if LIBCURL_VERSION_NUM >= 0x075500
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+#else
+  curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
   CURLcode result = curl_easy_perform(curl);
   long code = 0; curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
   if (result == CURLE_OK) status = (int)code;
