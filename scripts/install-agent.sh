@@ -15,8 +15,8 @@ esac
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64) artifact=linux-x86_64 ;;
   Darwin:arm64) artifact=darwin-arm64 ;;
-  Darwin:x86_64) artifact=darwin-x86_64 ;;
-  *) echo "cfmon Agent supports Linux x86_64 and macOS arm64 or x86_64" >&2; exit 2 ;;
+  Darwin:x86_64) echo "cfmon Agent does not support macOS Intel; use Linux x86_64 or macOS arm64" >&2; exit 2 ;;
+  *) echo "cfmon Agent supports Linux x86_64 and macOS arm64" >&2; exit 2 ;;
 esac
 
 release=https://github.com/OJII3/cfmon/releases/download/cfmon-agent-latest

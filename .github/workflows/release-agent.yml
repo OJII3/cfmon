@@ -52,8 +52,6 @@ jobs:
         include:
           - runner: macos-15
             artifact: darwin-arm64
-          - runner: macos-15-intel
-            artifact: darwin-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7.0.1
