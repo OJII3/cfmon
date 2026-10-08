@@ -51,6 +51,13 @@ function listOf(value) {
   return [];
 }
 
+function accountIdOf(account) {
+  for (const key of ['id', 'account_id', 'accountId']) {
+    if (typeof account?.[key] === 'string' && account[key]) return account[key];
+  }
+  return null;
+}
+
 function findEmail(value) {
   const result = resultOf(value);
   const candidates = [result?.email, result?.user?.email, result?.user?.email_address, result?.account?.email];
@@ -61,7 +68,8 @@ async function chooseAccount(accounts, choose) {
   if (accounts.length === 0) throw new Error('このCloudflare OAuth userで利用できるaccountがありません。');
   if (accounts.length === 1) return accounts[0];
   const selected = await choose(accounts);
-  const account = accounts.find((item) => item.id === selected || item.id === selected?.id);
+  const selectedId = typeof selected === 'string' ? selected : accountIdOf(selected);
+  const account = accounts.find((item) => accountIdOf(item) === selectedId);
   if (!account) throw new Error('Cloudflare account が選択されませんでした。');
   return account;
 }
@@ -215,12 +223,16 @@ export async function loginAndSelectAccount({ runCf = defaultRunCf, selectAccoun
   }
   if (!email) throw new Error('Cloudflare CLIからログイン中のemailを取得できませんでした。cf auth whoami を確認してください。');
 
-  const accounts = listOf(command(runCf, ['accounts', 'list', '--per-page', '100']));
+  const listedAccounts = listOf(command(runCf, ['accounts', 'list', '--per-page', '100']));
+  const accounts = listedAccounts.some((account) => accountIdOf(account))
+    ? listedAccounts
+    : listOf(whoami);
   const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const existing = envAccountId && accounts.find((account) => account.id === envAccountId);
+  const existing = envAccountId && accounts.find((account) => accountIdOf(account) === envAccountId);
   const account = existing ?? await chooseAccount(accounts, selectAccount);
-  if (typeof account.id !== 'string' || !account.id) throw new Error('Cloudflare account IDを取得できませんでした。');
-  return { accountId: account.id, email };
+  const accountId = accountIdOf(account);
+  if (!accountId) throw new Error('Cloudflare account IDを取得できませんでした。');
+  return { accountId, email };
 }
 
 /** Pick an active zone and use a predictable hostname without asking for domain text. */
