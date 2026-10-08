@@ -38,8 +38,11 @@ function App() {
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [busyAgent, setBusyAgent] = useState('');
   const [mutationError, setMutationError] = useState('');
+  const [installCopied, setInstallCopied] = useState(false);
+  const [installCopyError, setInstallCopyError] = useState('');
   const generation = useRef(0);
   const selectedHost = hosts.find((host) => host.id === selectedId);
+  const agentInstallCommand = `curl -fsSL https://raw.githubusercontent.com/OJII3/cfmon/main/scripts/install-agent.sh | sh -s -- '${window.location.origin}/api/v1/ingest'`;
 
   const refresh = useCallback(async (signal: AbortSignal, run: number) => {
     if (run !== generation.current) return;
@@ -125,6 +128,17 @@ function App() {
     }
   }
 
+  async function copyAgentInstallCommand() {
+    try {
+      await navigator.clipboard.writeText(agentInstallCommand);
+      setInstallCopied(true);
+      setInstallCopyError('');
+      window.setTimeout(() => setInstallCopied(false), 2000);
+    } catch {
+      setInstallCopyError('コマンドをコピーできませんでした。ブラウザーのクリップボード権限を確認してください。');
+    }
+  }
+
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#"><span className="brand-mark">c</span><span>cfmon<small>HOST MONITOR</small></span></a>
@@ -149,6 +163,7 @@ function App() {
       </section>
 
       <section className="section-title agent-section-title"><div><span className="eyebrow">AGENT ACCESS</span><h2>Agent の登録</h2></div><span>承認前の Agent はデータを送信できません</span></section>
+      <div className="agent-install-panel"><div><strong>Linux x86_64 に Agent を追加</strong><code>{agentInstallCommand}</code><small>監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</small>{installCopyError && <small role="alert">{installCopyError}</small>}</div><button className="approve-button" onClick={() => void copyAgentInstallCommand()}>{installCopied ? 'コピーしました' : 'インストールコマンドをコピー'}</button></div>
       {agentError && <div className="notice error-notice"><strong>Agent 一覧を取得できませんでした</strong><p>{agentError}</p>{agentError === ACCESS_LOGIN_REQUIRED_MESSAGE && <a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a>}<button onClick={() => setRefreshKey((value) => value + 1)}>再試行</button></div>}
       {mutationError && <div className="notice error-notice mutation-error"><strong>操作を完了できませんでした</strong><p>{mutationError}</p>{mutationError === ACCESS_LOGIN_REQUIRED_MESSAGE && <a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a>}</div>}
       {!agentError && pendingAgents.length === 0 && <div className="agent-empty">承認待ちの Agent はありません。</div>}
