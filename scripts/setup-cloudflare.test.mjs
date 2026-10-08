@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { configureAccess, loginAndSelectAccount } from './setup-cloudflare.mjs';
+import { configureAccess, loginAndSelectAccount, selectDeploymentDomain, selectReusablePolicy } from './setup-cloudflare.mjs';
 
 const json = (value) => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
 
@@ -40,6 +40,91 @@ test('logs in through OAuth and selects one listed account without entering meta
   assert.equal(calls[1].options.env.CLOUDFLARE_API_TOKEN, undefined);
 });
 
+test('selects an active zone and assigns the conventional cfmon hostname', async () => {
+  const { calls, runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [
+      { id: 'zone-one', name: 'example.test', status: 'active' },
+      { id: 'zone-pending', name: 'pending.test', status: 'pending' },
+    ] })],
+  });
+  const domain = await selectDeploymentDomain({ accountId: 'account-id', runCf });
+  assert.equal(domain, 'cfmon.example.test');
+  assert.equal(calls[0].options.env.CLOUDFLARE_ACCOUNT_ID, 'account-id');
+});
+
+test('falls back to workers.dev when there is no active zone', async () => {
+  const { runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [] })],
+  });
+  assert.equal(await selectDeploymentDomain({ accountId: 'account-id', runCf }), null);
+});
+
+test('selects among multiple active zones without requesting a hostname', async () => {
+  const { runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [
+      { id: 'one', name: 'one.test', status: 'active' },
+      { id: 'two', name: 'two.test', status: 'active' },
+    ] })],
+  });
+  const domain = await selectDeploymentDomain({
+    accountId: 'account-id', runCf,
+    selectZone: async (zones) => {
+      assert.deepEqual(zones.map(({ name }) => name), ['one.test', 'two.test']);
+      return zones[1];
+    },
+  });
+  assert.equal(domain, 'cfmon.two.test');
+});
+
+test('lets the user choose a subdomain within the selected zone', async () => {
+  const { runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [
+      { id: 'zone', name: 'example.test', status: 'active' },
+    ] })],
+  });
+  const domain = await selectDeploymentDomain({
+    accountId: 'account-id', runCf,
+    selectSubdomain: async (zone) => {
+      assert.equal(zone.name, 'example.test');
+      return 'metrics.prod';
+    },
+  });
+  assert.equal(domain, 'metrics.prod.example.test');
+});
+
+test('rejects malformed subdomains', async () => {
+  const { runCf } = mockCf({
+    'zones list --account-id account-id --status active --per-page 100': [json({ result: [
+      { id: 'zone', name: 'example.test', status: 'active' },
+    ] })],
+  });
+  await assert.rejects(selectDeploymentDomain({
+    accountId: 'account-id', runCf,
+    selectSubdomain: async () => 'invalid_name',
+  }), /サブドメイン/);
+});
+
+test('offers existing restrictive Allow policies but excludes everyone and service-token policies', async () => {
+  const { runCf } = mockCf({
+    'zero-trust access policies list --per-page 100': [json({ result: [
+      { id: 'safe', name: 'Engineering', decision: 'allow', include: [{ email_domain: { domain: 'example.test' } }] },
+      { id: 'everyone', name: 'Public', decision: 'allow', include: [{ everyone: {} }] },
+      { id: 'otp', name: 'Any email OTP', decision: 'allow', include: [{ login_method: { id: 'otp' } }] },
+      { id: 'deny', name: 'Blocked', decision: 'deny', include: [{ everyone: {} }] },
+    ] })],
+  });
+  const selected = await selectReusablePolicy({
+    accountId: 'account-id', runCf,
+    selectPolicy: async (choices) => {
+      assert.deepEqual(choices.map(({ label }) => label), [
+        'ログイン中のメールアドレスだけを許可（推奨）', 'Engineering（Allow）',
+      ]);
+      return 'safe';
+    },
+  });
+  assert.equal(selected.id, 'safe');
+});
+
 test('creates the Access organization, email identity provider, and protected app with only pair and ingest public', async () => {
   const accountId = '0123456789abcdef0123456789abcdef';
   const hostname = 'cfmon.worker-example.workers.dev';
@@ -68,6 +153,29 @@ test('creates the Access organization, email identity provider, and protected ap
   assert.equal(calls.every(({ options }) => options.env.CLOUDFLARE_ACCOUNT_ID === accountId), true);
   assert.equal(calls.every(({ options }) => options.env.CLOUDFLARE_API_TOKEN === undefined), true);
   assert.equal(calls.some(({ args }) => args.includes('--dry-run')), false);
+});
+
+test('attaches the selected reusable policy to the custom-domain app', async () => {
+  const calls = [];
+  const accessPolicy = { id: 'policy-id', name: 'Engineering', decision: 'allow' };
+  const runCf = (args, options) => {
+    calls.push({ args: [...args], options });
+    const key = args.slice(0, 4).join(' ');
+    if (key.startsWith('zero-trust organization get')) return json({ result: { auth_domain: 'team.cloudflareaccess.com' } });
+    if (key.startsWith('zero-trust identity-providers list')) return json({ result: [{ id: 'google-idp', type: 'google' }] });
+    if (key.startsWith('zero-trust identity-providers create')) return json({ result: { id: 'otp-id', type: 'onetimepin' } });
+    if (key.startsWith('zero-trust access applications list')) return json({ result: [] });
+    if (key.startsWith('zero-trust access applications create')) return json({ result: { id: 'app-id', aud: 'audience' } });
+    throw new Error(`Unexpected mocked command: ${args.join(' ')}`);
+  };
+  await configureAccess({
+    accountId: 'account-id', email: 'owner@example.test', hostname: 'https://cfmon.example.test', accessPolicy, runCf,
+  });
+  const create = calls.find(({ args }) => args[3] === 'create' && args[2] === 'applications');
+  const body = JSON.parse(create.args.at(-1));
+  assert.equal(body.domain, 'cfmon.example.test');
+  assert.deepEqual(body.policies, [{ id: 'policy-id', account_id: 'account-id', precedence: 1 }]);
+  assert.deepEqual(body.allowed_idps, ['google-idp', 'otp-id']);
 });
 
 test('repairs the app-owned policy while preserving unrelated restrictive policies', async () => {
