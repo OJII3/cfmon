@@ -44,3 +44,40 @@ jobs:
             dist/cfmon-agent-linux-x86_64 \
             dist/cfmon-agent-linux-x86_64.sha256 \
             --clobber
+
+  release-macos:
+    needs: release
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            artifact: darwin-arm64
+          - runner: macos-15-intel
+            artifact: darwin-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install native build dependencies
+        run: brew install curl openssl@3 pkg-config
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Build macOS Agent
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+        run: |
+          export CPATH="$(brew --prefix curl)/include:$(brew --prefix openssl@3)/include"
+          export LIBRARY_PATH="$(brew --prefix curl)/lib:$(brew --prefix openssl@3)/lib"
+          cd agent
+          moon check --target native
+          moon build --target native --release
+          mkdir -p ../dist
+          install -m 755 _build/native/release/build/src/src.exe "../dist/cfmon-agent-$ARTIFACT"
+          cd ../dist
+          shasum -a 256 "cfmon-agent-$ARTIFACT" > "cfmon-agent-$ARTIFACT.sha256"
+      - name: Upload macOS Agent release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: gh release upload cfmon-agent-latest "dist/cfmon-agent-$ARTIFACT" "dist/cfmon-agent-$ARTIFACT.sha256" --clobber

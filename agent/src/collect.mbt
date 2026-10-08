@@ -101,11 +101,46 @@ fn fields_pair(line : String, delimiter : String) -> Array[String] {
 }
 
 ///|
+fn csv_fields(line : String) -> Array[String] {
+  fields_pair(line, ",")
+}
+
+///|
+fn collect_macos(previous_net : (Double, Double), elapsed : Double) -> MetricPayload {
+  let values = csv_fields(macos_metrics())
+  if values.length() != 7 {
+    eprintln("unable to read required macOS metrics")
+    process_exit(2)
+  }
+  let (old_rx, old_tx) = previous_net
+  let safe_elapsed = if elapsed <= 0.0 { 1.0 } else { elapsed }
+  let rx = number(values[4])
+  let tx = number(values[5])
+  MetricPayload::{
+    host: {
+      let h = env("CFMON_HOST")
+      if h == "" { hostname() } else { h }
+    },
+    os: "macos",
+    cpu: clamp(number(values[0]), 0.0, 1.0),
+    memory: clamp(number(values[1]), 0.0, 1.0),
+    load1: nonnegative(number(values[2])),
+    disk: clamp(number(values[3]), 0.0, 1.0),
+    rx_bps: nonnegative((rx - old_rx) / safe_elapsed),
+    tx_bps: nonnegative((tx - old_tx) / safe_elapsed),
+    uptime: nonnegative(number(values[6])),
+  }
+}
+
+///|
 fn collect(
   previous_cpu : (Double, Double),
   previous_net : (Double, Double),
   elapsed : Double,
 ) -> MetricPayload {
+  if os_name() == "macos" {
+    return collect_macos(previous_net, elapsed)
+  }
   let stat = read_file(@utf8.encode("/proc/stat"))
   let mem = read_file(@utf8.encode("/proc/meminfo"))
   let load_text = read_file(@utf8.encode("/proc/loadavg"))
@@ -161,6 +196,13 @@ fn current_cpu() -> (Double, Double) {
 
 ///|
 fn current_network() -> (Double, Double) {
+  if os_name() == "macos" {
+    let values = csv_fields(macos_metrics())
+    if values.length() == 7 {
+      return (number(values[4]), number(values[5]))
+    }
+    return (0.0, 0.0)
+  }
   network_counters(read_file(@utf8.encode("/proc/net/dev")))
 }
 

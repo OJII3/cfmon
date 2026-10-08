@@ -99,8 +99,8 @@ fn send_payload(payload : MetricPayload, url : String, dir : String) -> Int {
 }
 
 ///|
-fn pair_body(host : String) -> String {
-  "{\"host\":\"\{host}\",\"os\":\"linux\"}"
+fn pair_body(host : String, os : String) -> String {
+  "{\"host\":\"\{host}\",\"os\":\"\{os}\"}"
 }
 
 ///|
@@ -112,7 +112,7 @@ fn ensure_paired(pair_url : String, dir : String, host : String, once : Bool) ->
   }
   eprintln("cfmon key fingerprint: \{fp}")
   eprintln("Dashboardでこのfingerprintを確認して承認してください")
-  let body = pair_body(host)
+  let body = pair_body(host, os_name())
   while true {
     let status = signed_post(@utf8.encode(pair_url), @utf8.encode(dir), @utf8.encode(body))
     if status == 200 {

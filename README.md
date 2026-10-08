@@ -1,9 +1,9 @@
 # cfmon
 
-Linux ホストを MoonBit のネイティブエージェントで監視し、Cloudflare に保存・表示します。API トークンや共有シークレットを発行・コピー・入力する必要はありません。
+Linux または macOS ホストを MoonBit のネイティブエージェントで監視し、Cloudflare に保存・表示します。API トークンや共有シークレットを発行・コピー・入力する必要はありません。
 
 ```text
-Linux host → MoonBit Agent → 署名付き HTTPS → Worker → Analytics Engine
+Linux / macOS host → MoonBit Agent → 署名付き HTTPS → Worker → Analytics Engine
                                                ↑          ↓
                                          D1 登録台帳   Analytics SQL binding
                                                ↑          ↓
@@ -17,7 +17,7 @@ Linux host → MoonBit Agent → 署名付き HTTPS → Worker → Analytics Eng
 
 Cloudflare の設定・リソース作成・デプロイには `cf` CLI を使います。Analytics SQL binding を含む `cloudflare.config.ts` に移行済みで、初回認証は1回です。ビルドは `cf` がWrangler bundlerへ委譲します。
 
-Linux 専用です。温度、systemd 状態、アラート、R2 はまだ含みません。
+Agent は Linux x86_64 と macOS arm64 / x86_64 に対応します。温度、サービス状態、アラート、R2 はまだ含みません。
 
 ## 初回セットアップ
 
@@ -52,9 +52,9 @@ npm run deploy -- --dry-run
 
 ## Agent を登録する
 
-Dashboard の「インストールコマンドをコピー」を押し、監視する Linux x86_64 ホストのターミナルで実行します。Worker URL はコマンドに含まれるため、入力やリポジトリの clone は不要です。
+Dashboard の「インストールコマンドをコピー」を押し、監視する Linux x86_64 または macOS ホストのターミナルで実行します。Worker URL はコマンドに含まれるため、入力やリポジトリの clone は不要です。
 
-インストーラーはチェックサムを検証したネイティブ Agent をダウンロードし、ユーザー領域に配置します。systemd user service が使えるホストではサービスを有効化して起動します。MoonBit、Node.js、C 開発環境は必要ありません。インストールコマンドをもう一度実行すると、最新版に更新してサービスを再起動します。
+インストーラーはチェックサムを検証したネイティブ Agent をダウンロードし、ユーザー領域に配置します。Linux では systemd user service、macOS では LaunchAgent を使ってログイン時に起動します。MoonBit、Node.js、C 開発環境は必要ありません。インストールコマンドをもう一度実行すると、最新版に更新してサービスを再起動します。
 
 Agent は初回に Ed25519 鍵を作り、公開指紋を出力して承認を待ちます。次のコマンドで指紋を確認し、Dashboard に表示された **SHA-256 指紋と一致することを確認して承認**してください。ホスト名だけでは承認しないでください。承認後にメトリクスの送信が始まります。
 
@@ -62,7 +62,7 @@ Agent は初回に Ed25519 鍵を作り、公開指紋を出力して承認を�
 journalctl --user -u cfmon-agent -f
 ```
 
-systemd user service がない環境では、インストーラーが表示するコマンドで Agent を起動できます。Agent は `$HOME/.local/bin/cfmon-agent`、秘密鍵は `$XDG_STATE_HOME/cfmon`（未設定時 `$HOME/.local/state/cfmon`）に保存します。
+systemd user service がない Linux 環境では、インストーラーが表示するコマンドで Agent を起動できます。macOS のログは `$HOME/Library/Logs/cfmon-agent.log` で確認できます。Agent は `$HOME/.local/bin/cfmon-agent`、秘密鍵は `$XDG_STATE_HOME/cfmon`（未設定時 `$HOME/.local/state/cfmon`）に保存します。
 
 - `CFMON_URL`: ingest の完全な URL。本番は HTTPS、ローカルテストのみ loopback HTTP を許可します。
 - `CFMON_HOST`: 省略時は OS の hostname。英数字で始まる1〜128文字で、英数字・`.`・`_`・`-` が使えます。ホストごとに異なる ID を使ってください。
@@ -81,7 +81,7 @@ moon build --target native              # 常駐用ネイティブ実行ファ�
 
 ## メトリクス
 
-CPU は `/proc/stat` の差分、メモリは `MemAvailable`、ディスクは `/` の statvfs、ネットワークは loopback を除くインターフェースのカウンタ差分です。ネットワークの単位は **bytes/second** です。仮想インターフェースも含むため、ブリッジ・コンテナ環境では同じ通信が複数回数えられる場合があります。
+Linux では CPU は `/proc/stat` の差分、メモリは `MemAvailable` を使います。macOS では Mach の CPU・メモリ統計と `getloadavg` を使います。両 OS ともディスクは `/` の statvfs、ネットワークは loopback を除くインターフェースのカウンタ差分です。ネットワークの単位は **bytes/second** です。仮想インターフェースも含むため、ブリッジ・コンテナ環境では同じ通信が複数回数えられる場合があります。
 
 ```json
 {"host":"bronya","os":"linux","cpu":0.32,"memory":0.71,"load1":1.42,"disk":0.51,"rx_bps":120340,"tx_bps":58321,"uptime":93211}

@@ -10,6 +10,12 @@ extern "C" fn getenv(key : Bytes) -> String = "cfmon_getenv"
 extern "C" fn hostname() -> String = "cfmon_hostname"
 
 ///|
+extern "C" fn os_name() -> String = "cfmon_os_name"
+
+///|
+extern "C" fn macos_metrics() -> String = "cfmon_macos_metrics"
+
+///|
 extern "C" fn monotonic() -> Double = "cfmon_monotonic"
 
 ///|

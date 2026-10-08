@@ -11,9 +11,19 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include <moonbit.h>
+#ifdef __APPLE__
+#include <ifaddrs.h>
+#include <mach/host_info.h>
+#include <mach/mach_host.h>
+#include <mach/mach_port.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <sys/sysctl.h>
+#endif
 
 static char *to_c_string(moonbit_bytes_t bytes) {
   int32_t n = Moonbit_array_length(bytes);
@@ -77,6 +87,75 @@ moonbit_string_t cfmon_hostname(void) {
   if (gethostname(buf, sizeof(buf) - 1) != 0) strcpy(buf, "unknown");
   return from_ascii(buf);
 }
+
+moonbit_string_t cfmon_os_name(void) {
+#ifdef __APPLE__
+  return from_ascii("macos");
+#else
+  return from_ascii("linux");
+#endif
+}
+
+#ifdef __APPLE__
+double cfmon_disk_used(void);
+moonbit_string_t cfmon_macos_metrics(void) {
+  static uint64_t previous_total = 0, previous_busy = 0;
+  static int have_previous_cpu = 0;
+  host_cpu_load_info_data_t cpu;
+  host_t host = mach_host_self();
+  mach_msg_type_number_t cpu_count = HOST_CPU_LOAD_INFO_COUNT;
+  double cpu_used = 0.0, memory_used = 0.0, load = 0.0, uptime = 0.0;
+  uint64_t rx = 0, tx = 0, total_memory = 0;
+  if (host_statistics(host, HOST_CPU_LOAD_INFO, (host_info_t)&cpu, &cpu_count) == KERN_SUCCESS) {
+    uint64_t user = cpu.cpu_ticks[CPU_STATE_USER];
+    uint64_t system = cpu.cpu_ticks[CPU_STATE_SYSTEM];
+    uint64_t nice = cpu.cpu_ticks[CPU_STATE_NICE];
+    uint64_t idle = cpu.cpu_ticks[CPU_STATE_IDLE];
+    uint64_t total = user + system + nice + idle;
+    uint64_t busy = total - idle;
+    if (have_previous_cpu && total > previous_total)
+      cpu_used = (double)(busy - previous_busy) / (double)(total - previous_total);
+    previous_total = total;
+    previous_busy = busy;
+    have_previous_cpu = 1;
+  }
+  vm_statistics64_data_t vm;
+  mach_msg_type_number_t vm_count = HOST_VM_INFO64_COUNT;
+  if (host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&vm, &vm_count) == KERN_SUCCESS &&
+      sysctlbyname("hw.memsize", &total_memory, &(size_t){sizeof(total_memory)}, NULL, 0) == 0 && total_memory > 0) {
+    uint64_t available = (uint64_t)(vm.free_count + vm.inactive_count + vm.speculative_count + vm.purgeable_count) * sysconf(_SC_PAGESIZE);
+    memory_used = 1.0 - (double)available / (double)total_memory;
+  }
+  double loads[1];
+  if (getloadavg(loads, 1) == 1) load = loads[0];
+  struct ifaddrs *interfaces = NULL;
+  if (getifaddrs(&interfaces) == 0) {
+    for (struct ifaddrs *it = interfaces; it; it = it->ifa_next) {
+      if (!it->ifa_addr || it->ifa_addr->sa_family != AF_LINK || strcmp(it->ifa_name, "lo0") == 0 || !it->ifa_data) continue;
+      struct if_data *data = (struct if_data *)it->ifa_data;
+      rx += data->ifi_ibytes;
+      tx += data->ifi_obytes;
+    }
+    freeifaddrs(interfaces);
+  }
+  struct timeval boot;
+  size_t boot_size = sizeof(boot);
+  if (sysctlbyname("kern.boottime", &boot, &boot_size, NULL, 0) == 0)
+    uptime = (double)time(NULL) - (double)boot.tv_sec;
+  mach_port_deallocate(mach_task_self(), host);
+  if (cpu_used < 0.0) cpu_used = 0.0;
+  if (cpu_used > 1.0) cpu_used = 1.0;
+  if (memory_used < 0.0) memory_used = 0.0;
+  if (memory_used > 1.0) memory_used = 1.0;
+  char result[256];
+  snprintf(result, sizeof(result), "%.10g,%.10g,%.10g,%.10g,%llu,%llu,%.10g",
+    cpu_used, memory_used, load, cfmon_disk_used(),
+    (unsigned long long)rx, (unsigned long long)tx, uptime);
+  return from_ascii(result);
+}
+#else
+moonbit_string_t cfmon_macos_metrics(void) { return from_ascii(""); }
+#endif
 
 double cfmon_monotonic(void) {
   struct timespec ts;
