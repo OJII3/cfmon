@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Anchor,
   Alert,
   AppShell,
   Badge,
@@ -15,6 +16,7 @@ import {
   SimpleGrid,
   Stack,
   Text,
+  ThemeIcon,
   Title,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
@@ -45,8 +47,8 @@ const formatFingerprint = (fingerprint: string) => fingerprint.match(/.{1,4}/g)?
 const accessLoginUrl = () => `/api/v1/auth/login?redirect_url=${encodeURIComponent(window.location.href)}`;
 
 function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: string; detail?: string }) {
-  return <Group className="section-heading" justify="space-between" align="end">
-    <Box><Text className="eyebrow">{eyebrow}</Text><Title order={2}>{title}</Title></Box>
+  return <Group justify="space-between" align="end">
+    <Box><Text size="xs" c="dimmed" ff="monospace">{eyebrow}</Text><Title order={2}>{title}</Title></Box>
     {detail && <Text size="xs" c="dimmed">{detail}</Text>}
   </Group>;
 }
@@ -125,11 +127,11 @@ function App() {
 
   const current = metrics.at(-1);
   const cards = current ? [
-    { label: 'CPU', value: formatPercent(current.cpu), tone: 'mint' },
-    { label: 'メモリ', value: formatPercent(current.memory), tone: 'blue' },
-    { label: 'ディスク', value: formatPercent(current.disk), tone: 'amber' },
-    { label: 'Load 1m', value: current.load1.toFixed(2), tone: 'violet' },
-    { label: '稼働時間', value: formatUptime(current.uptime), tone: 'neutral' },
+    { label: 'CPU', value: formatPercent(current.cpu) },
+    { label: 'メモリ', value: formatPercent(current.memory) },
+    { label: 'ディスク', value: formatPercent(current.disk) },
+    { label: 'Load 1m', value: current.load1.toFixed(2) },
+    { label: '稼働時間', value: formatUptime(current.uptime) },
   ] : [];
   const pendingAgents = agents.filter((agent) => agent.status === 'pending');
   const approvedAgents = agents.filter((agent) => agent.status === 'approved');
@@ -167,24 +169,23 @@ function App() {
   }
 
   return <AppShell
-    className="app-shell"
     header={{ height: 64 }}
     navbar={{ width: 248, breakpoint: 'sm', collapsed: { mobile: !navOpened } }}
-    padding="xl"
+    padding="md"
   >
-    <AppShell.Navbar className="sidebar" p="md">
-      <AppShell.Section className="brand-row">
-        <a className="brand" href="#"><span className="brand-mark">c</span><span>cfmon<small>HOST MONITOR</small></span></a>
+    <AppShell.Navbar p="md">
+      <AppShell.Section mb="xl">
+        <Anchor href="#" underline="never" c="inherit"><Group gap="sm"><ThemeIcon color="teal" radius="md">c</ThemeIcon><Box><Text fw={700}>cfmon</Text><Text size="xs" c="dimmed" ff="monospace">HOST MONITOR</Text></Box></Group></Anchor>
       </AppShell.Section>
-      <AppShell.Section grow component={ScrollArea} className="host-nav">
-        <Group className="nav-heading" justify="space-between"><Text className="eyebrow">インベントリ</Text><Badge variant="light" color="gray">{hosts.length}</Badge></Group>
+      <AppShell.Section grow component={ScrollArea}>
+        <Group justify="space-between" mb="xs"><Text size="xs" c="dimmed">インベントリ</Text><Badge variant="light" color="gray">{hosts.length}</Badge></Group>
         <Stack gap={5}>
           {hosts.map((host) => <NavLink
             key={host.id}
             label={host.hostname}
             description={host.os || 'OS 不明'}
             active={selectedId === host.id}
-            leftSection={<span className="host-dot" />}
+            leftSection={<ThemeIcon size={8} radius="xl" color="teal" />}
             onClick={() => {
               navHandlers.close();
               if (host.id === selectedId) return;
@@ -195,41 +196,47 @@ function App() {
           />)}
         </Stack>
       </AppShell.Section>
-      <AppShell.Section className="sidebar-foot"><span className="live-dot" />自動更新 30 秒</AppShell.Section>
+      <AppShell.Section pt="md"><Group gap="xs"><ThemeIcon size={8} radius="xl" color="teal" /><Text size="xs" c="dimmed">自動更新 30 秒</Text></Group></AppShell.Section>
     </AppShell.Navbar>
 
-    <AppShell.Header className="topbar" px={{ base: 'md', sm: 'xl' }}>
+    <AppShell.Header px={{ base: 'md', sm: 'xl' }}>
       <Group justify="space-between" h="100%">
-        <Group gap="sm"><Burger opened={navOpened} onClick={navHandlers.toggle} hiddenFrom="sm" size="sm" aria-label="ホスト一覧を開く" /><Text className="breadcrumb">システム <span>/</span> ホスト</Text></Group>
-        <Group gap="md"><Text className="updated">{updatedAt ? `更新 ${updatedAt.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '接続中'}</Text>
-          <Button variant="default" size="xs" onClick={() => setRefreshKey((value) => value + 1)} leftSection={<span className="refresh-glyph">↻</span>}>更新</Button>
+        <Group gap="sm"><Burger opened={navOpened} onClick={navHandlers.toggle} hiddenFrom="sm" size="sm" aria-label="ホスト一覧を開く" /><Text size="sm" c="dimmed">システム / ホスト</Text></Group>
+        <Group gap="md"><Text visibleFrom="sm" size="xs" c="dimmed" ff="monospace">{updatedAt ? `更新 ${updatedAt.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '接続中'}</Text>
+          <Button variant="default" size="xs" onClick={() => setRefreshKey((value) => value + 1)} leftSection={<Text component="span" c="teal" size="lg">↻</Text>}>更新</Button>
         </Group>
       </Group>
     </AppShell.Header>
 
-    <AppShell.Main className="main-content">
+    <AppShell.Main>
       <Stack gap="xl">
-        <Group className="page-heading" justify="space-between" align="center">
-          <Box><Text className="eyebrow">OVERVIEW / HOSTS</Text><Title order={1}>{selectedHost?.hostname ?? 'ホスト監視'}</Title>
+        <Group justify="space-between" align="center">
+          <Box><Text size="xs" c="dimmed" ff="monospace">OVERVIEW / HOSTS</Text><Title order={1}>{selectedHost?.hostname ?? 'ホスト監視'}</Title>
             <Text c="dimmed" size="sm">{selectedHost ? `${selectedHost.os || 'OS 不明'} · 最終受信 ${formatSeen(selectedHost.last_seen)}` : 'ホストの状態をリアルタイムで確認できます。'}</Text>
           </Box>
-          {selectedHost && <Badge className="status-pill" variant="light" color={Date.now() - new Date(selectedHost.last_seen).getTime() < 120_000 ? 'teal' : 'gray'} leftSection={<span className="status-dot" />}>
+          {selectedHost && <Badge variant="light" color={Date.now() - new Date(selectedHost.last_seen).getTime() < 120_000 ? 'teal' : 'gray'}>
             {Date.now() - new Date(selectedHost.last_seen).getTime() < 120_000 ? '最近受信' : '受信停止'}
           </Badge>}
         </Group>
 
-        <section>
-          <SectionHeading eyebrow="AGENT ACCESS" title="Agent の登録" detail="承認前の Agent はデータを送信できません" />
-          <Paper className="agent-install-panel" withBorder p="md" mt="sm">
-            <Stack gap="xs" className="install-copy">
-              <Text fw={600} size="sm">Linux x86_64 / macOS に Agent を追加</Text>
-              <Code className="install-command">{agentInstallCommand}</Code>
-              <Text size="xs" c="dimmed">Linux x86_64 と macOS arm64 に対応しています。監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</Text>
-              {installCopyError && <Text size="xs" c="red" role="alert">{installCopyError}</Text>}
-            </Stack>
-            <Button className="install-button" onClick={() => void copyAgentInstallCommand()}>{installCopied ? 'コピーしました' : 'インストールコマンドをコピー'}</Button>
-          </Paper>
-        </section>
+        {state === 'loading' && <Alert color="teal" title="読み込み中" icon={<Text c="teal">◌</Text>}>メトリクスを読み込んでいます…</Alert>}
+        {state === 'error' && <Alert color="red" title="データを取得できませんでした">
+          <Text size="sm">{error}</Text>
+          {error === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
+          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => setRefreshKey((value) => value + 1)}>再試行</Button>
+        </Alert>}
+        {state === 'ready' && hosts.length === 0 && <Paper withBorder p="xl" ta="center"><ThemeIcon size="xl" variant="light" radius="md" mx="auto" mb="md">⌁</ThemeIcon><Title order={2}>ホストがまだありません</Title><Text c="dimmed" size="sm">Agent の申請を承認すると、メトリクスが届き始めます。</Text></Paper>}
+        {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
+        {state === 'ready' && current && <section>
+          <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
+          <SimpleGrid cols={{ base: 2, md: 3, xl: 5 }} spacing="sm" mt="sm" mb="xl" aria-label="最新メトリクス">
+            {cards.map((card) => <Paper withBorder p="md" key={card.label}>
+              <Text size="xs" c="dimmed" mb="xs">{card.label}</Text><Text fw={600} ff="monospace" truncate>{card.value}</Text>
+            </Paper>)}
+          </SimpleGrid>
+          <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail="1 分間隔 · 1 時間" />
+          <Charts metrics={metrics} />
+        </section>}
 
         {agentError && <Alert color="red" title="Agent 一覧を取得できませんでした" withCloseButton={false}>
           <Text size="sm">{agentError}</Text>
@@ -242,53 +249,52 @@ function App() {
         </Alert>}
 
         <section>
+          <SectionHeading eyebrow="AGENT ACCESS" title="Agent の登録" detail="承認前の Agent はデータを送信できません" />
+          <Paper withBorder p="sm" mt="sm">
+            <Group justify="space-between" gap="xs">
+              <Text fw={600} size="sm">Linux x86_64 / macOS に Agent を追加</Text>
+              <Button size="xs" onClick={() => void copyAgentInstallCommand()}>{installCopied ? 'コピーしました' : 'コマンドをコピー'}</Button>
+            </Group>
+            {installCopyError && <Text size="xs" c="red" mt="xs" role="alert">{installCopyError}</Text>}
+            <details>
+              <summary>コマンドと対応環境を表示</summary>
+              <Stack gap="xs" mt="xs">
+                <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{agentInstallCommand}</Code>
+                <Text size="xs" c="dimmed">Linux x86_64 と macOS arm64 に対応しています。監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</Text>
+              </Stack>
+            </details>
+          </Paper>
+        </section>
+
+        <section>
           <SectionHeading eyebrow="PENDING APPROVAL" title="承認待ち" detail={`${pendingAgents.length} 件`} />
-          {!agentError && pendingAgents.length === 0 && <Paper className="agent-empty" withBorder mt="sm"><Text c="dimmed" size="sm">承認待ちの Agent はありません。</Text></Paper>}
+          {!agentError && pendingAgents.length === 0 && <Paper withBorder p="md" mt="sm"><Text c="dimmed" size="sm">承認待ちの Agent はありません。</Text></Paper>}
           <Stack gap="sm" mt="sm">
-            {pendingAgents.map((agent) => <Paper className="agent-card pending-agent" withBorder p="lg" key={agent.public_key}>
+            {pendingAgents.map((agent) => <Paper withBorder p="lg" key={agent.public_key}>
               <Group justify="space-between" align="start">
                 <Box><Badge color="yellow" variant="light">承認待ち</Badge><Title order={3} mt="sm">{agent.host}</Title><Text size="xs" c="dimmed">{agent.os || 'OS 不明'} · 登録申請 {formatAge(agent.last_requested_at)}</Text></Box>
               </Group>
-              <Text className="fingerprint-label" size="xs" mt="lg" mb="xs">公開鍵の指紋 <span>SHA-256</span></Text>
-              <Code className="fingerprint">{formatFingerprint(agent.fingerprint)}</Code>
-              <Group justify="space-between" align="center" mt="md" className="approval-actions">
+              <Text size="xs" c="dimmed" mt="lg" mb="xs">公開鍵の指紋 <Text component="span" size="xs" c="dimmed" ff="monospace">SHA-256</Text></Text>
+              <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{formatFingerprint(agent.fingerprint)}</Code>
+              <Stack gap="sm" mt="md">
                 <Checkbox checked={!!checked[agent.public_key]} onChange={(event) => setChecked((current) => ({ ...current, [agent.public_key]: event.currentTarget.checked }))} label="Agent 画面の指紋と一致することを確認しました" />
                 <Button disabled={!checked[agent.public_key] || !!busyAgent} loading={busyAgent === agent.public_key} onClick={() => void mutateAgent(agent, 'approve')}>この Agent を承認</Button>
-              </Group>
+              </Stack>
             </Paper>)}
           </Stack>
         </section>
 
         <section>
           <SectionHeading eyebrow="REGISTERED AGENTS" title="登録済み Agent" detail={`${approvedAgents.length} 台`} />
-          {approvedAgents.length > 0 && <Stack gap="xs" mt="sm">{approvedAgents.map((agent) => <Paper className="registered-agent" withBorder p="sm" key={agent.public_key}>
-            <Group justify="space-between" wrap="nowrap">
-              <Group gap="sm" wrap="nowrap" className="registered-copy"><Badge color="teal" variant="light">承認済み</Badge><Box><Text fw={600} size="sm" truncate>{agent.host}</Text><Text size="xs" c="dimmed">{agent.os || 'OS 不明'}</Text></Box></Group>
+          {approvedAgents.length > 0 && <Stack gap="xs" mt="sm">{approvedAgents.map((agent) => <Paper withBorder p="sm" key={agent.public_key}>
+            <Group justify="space-between" wrap="wrap">
+              <Group gap="sm" wrap="nowrap"><Badge color="teal" variant="light">承認済み</Badge><Box><Text fw={600} size="sm" truncate>{agent.host}</Text><Text size="xs" c="dimmed">{agent.os || 'OS 不明'}</Text></Box></Group>
               <Button variant="light" color="red" size="xs" disabled={!!busyAgent} loading={busyAgent === agent.public_key} onClick={() => void mutateAgent(agent, 'revoke')}>登録解除</Button>
             </Group>
           </Paper>)}</Stack>}
         </section>
-
-        {state === 'loading' && <Alert color="teal" title="読み込み中" icon={<span className="loading-mark">◌</span>}>メトリクスを読み込んでいます…</Alert>}
-        {state === 'error' && <Alert color="red" title="データを取得できませんでした">
-          <Text size="sm">{error}</Text>
-          {error === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
-          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => setRefreshKey((value) => value + 1)}>再試行</Button>
-        </Alert>}
-        {state === 'ready' && hosts.length === 0 && <Paper className="empty-state" withBorder p="xl"><Text className="empty-icon">⌁</Text><Title order={2}>ホストがまだありません</Title><Text c="dimmed" size="sm">Agent の申請を承認すると、メトリクスが届き始めます。</Text></Paper>}
-        {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
-        {state === 'ready' && current && <section>
-          <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
-          <SimpleGrid className="metric-grid" cols={{ base: 2, md: 3, xl: 5 }} spacing="sm" mt="sm" aria-label="最新メトリクス">
-            {cards.map((card) => <Paper className={`metric-card ${card.tone}`} withBorder p="md" key={card.label}>
-              <Text className="metric-label" size="xs" c="dimmed">{card.label}</Text><Text className="metric-value" fw={600}>{card.value}</Text>
-            </Paper>)}
-          </SimpleGrid>
-          <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail="1 分間隔 · 1 時間" />
-          <Charts metrics={metrics} />
-        </section>}
       </Stack>
-      <Text className="app-footer" ta="center">cfmon <span>·</span> ホストの状態をシンプルに可視化</Text>
+      <Text size="xs" c="dimmed" ff="monospace" ta="center" p="lg">cfmon · ホストの状態をシンプルに可視化</Text>
     </AppShell.Main>
   </AppShell>;
 }
