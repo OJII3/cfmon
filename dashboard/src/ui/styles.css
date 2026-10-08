@@ -33,7 +33,7 @@ button, input { font: inherit; }
 .breadcrumb span { padding: 0 9px; color: #465260; }
 .updated { color: #8b99a8; font: 10px 'DM Mono', monospace; }
 .refresh-glyph { color: #65d8b0; font-size: 16px; line-height: 1; }
-.main-content { width: 100%; max-width: 1660px; margin: 0 auto; padding: 32px 48px 0; }
+.main-content { width: 100%; max-width: 1660px; margin: 0 auto; padding: calc(var(--app-shell-header-offset, 0rem) + 32px) 48px 0; }
 .page-heading { min-height: 92px; }
 .page-heading h1 { margin: 6px 0 4px; font-size: clamp(22px, 2.3vw, 29px); letter-spacing: -.7px; }
 .page-heading p { margin: 0; }
@@ -42,10 +42,13 @@ button, input { font: inherit; }
 .section-heading { margin: 0 0 12px; }
 .section-heading h2 { margin-top: 4px; font-size: 16px; font-weight: 600; }
 .section-heading > .mantine-Text-root { padding-bottom: 2px; }
-.agent-install-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; border-color: var(--line); background: var(--surface); }
+.agent-install-panel { border-color: var(--line); background: var(--surface); }
 .install-copy { min-width: 0; }
 .install-command { display: block; overflow-wrap: anywhere; padding: 9px 11px; border: 1px solid #293541; border-radius: 6px; background: #0b1219; color: #b8c8d7; font-size: 10px; line-height: 1.7; }
 .install-button { flex: none; }
+.install-details { margin-top: 8px; color: #9aa8b6; font-size: 11px; }
+.install-details summary { width: fit-content; cursor: pointer; }
+.install-details .install-copy { margin-top: 8px; }
 .agent-empty, .agent-card, .registered-agent, .metric-card, .chart-card, .empty-state { border-color: var(--line); background: var(--surface); }
 .agent-empty { padding: 16px; }
 .pending-agent h3 { margin-bottom: 3px; font-size: 16px; }
@@ -87,15 +90,13 @@ button, input { font: inherit; }
 .loading-mark { color: #65d8b0; font-size: 18px; }
 
 @media (max-width: 992px) {
-  .main-content { padding: 28px 28px 0; }
+  .main-content { padding: calc(var(--app-shell-header-offset, 0rem) + 28px) 28px 0; }
 }
 @media (max-width: 767px) {
-  .main-content { padding: 24px 16px 0; }
+  .main-content { padding: calc(var(--app-shell-header-offset, 0rem) + 24px) 16px 0; }
   .page-heading { min-height: 0; align-items: flex-start; }
   .page-heading .status-pill { margin-top: 20px; }
   .updated { display: none; }
-  .agent-install-panel { align-items: stretch; flex-direction: column; }
-  .install-button { align-self: flex-start; }
   .approval-actions { align-items: stretch; flex-direction: column; }
   .approval-actions .mantine-Button-root { align-self: flex-start; }
   .charts-grid { grid-template-columns: 1fr; gap: 9px; }

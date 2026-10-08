@@ -218,18 +218,24 @@ function App() {
           </Badge>}
         </Group>
 
-        <section>
-          <SectionHeading eyebrow="AGENT ACCESS" title="Agent の登録" detail="承認前の Agent はデータを送信できません" />
-          <Paper className="agent-install-panel" withBorder p="md" mt="sm">
-            <Stack gap="xs" className="install-copy">
-              <Text fw={600} size="sm">Linux x86_64 / macOS に Agent を追加</Text>
-              <Code className="install-command">{agentInstallCommand}</Code>
-              <Text size="xs" c="dimmed">Linux x86_64 と macOS arm64 に対応しています。監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</Text>
-              {installCopyError && <Text size="xs" c="red" role="alert">{installCopyError}</Text>}
-            </Stack>
-            <Button className="install-button" onClick={() => void copyAgentInstallCommand()}>{installCopied ? 'コピーしました' : 'インストールコマンドをコピー'}</Button>
-          </Paper>
-        </section>
+        {state === 'loading' && <Alert color="teal" title="読み込み中" icon={<span className="loading-mark">◌</span>}>メトリクスを読み込んでいます…</Alert>}
+        {state === 'error' && <Alert color="red" title="データを取得できませんでした">
+          <Text size="sm">{error}</Text>
+          {error === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
+          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => setRefreshKey((value) => value + 1)}>再試行</Button>
+        </Alert>}
+        {state === 'ready' && hosts.length === 0 && <Paper className="empty-state" withBorder p="xl"><Text className="empty-icon">⌁</Text><Title order={2}>ホストがまだありません</Title><Text c="dimmed" size="sm">Agent の申請を承認すると、メトリクスが届き始めます。</Text></Paper>}
+        {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
+        {state === 'ready' && current && <section>
+          <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
+          <SimpleGrid className="metric-grid" cols={{ base: 2, md: 3, xl: 5 }} spacing="sm" mt="sm" aria-label="最新メトリクス">
+            {cards.map((card) => <Paper className={`metric-card ${card.tone}`} withBorder p="md" key={card.label}>
+              <Text className="metric-label" size="xs" c="dimmed">{card.label}</Text><Text className="metric-value" fw={600}>{card.value}</Text>
+            </Paper>)}
+          </SimpleGrid>
+          <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail="1 分間隔 · 1 時間" />
+          <Charts metrics={metrics} />
+        </section>}
 
         {agentError && <Alert color="red" title="Agent 一覧を取得できませんでした" withCloseButton={false}>
           <Text size="sm">{agentError}</Text>
@@ -240,6 +246,24 @@ function App() {
           <Text size="sm">{mutationError}</Text>
           {mutationError === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
         </Alert>}
+
+        <section>
+          <SectionHeading eyebrow="AGENT ACCESS" title="Agent の登録" detail="承認前の Agent はデータを送信できません" />
+          <Paper className="agent-install-panel" withBorder p="sm" mt="sm">
+            <Group justify="space-between" wrap="nowrap" gap="xs">
+              <Text fw={600} size="sm">Linux x86_64 / macOS に Agent を追加</Text>
+              <Button className="install-button" size="xs" onClick={() => void copyAgentInstallCommand()}>{installCopied ? 'コピーしました' : 'コマンドをコピー'}</Button>
+            </Group>
+            {installCopyError && <Text size="xs" c="red" mt="xs" role="alert">{installCopyError}</Text>}
+            <details className="install-details">
+              <summary>コマンドと対応環境を表示</summary>
+              <Stack gap="xs" className="install-copy">
+                <Code className="install-command">{agentInstallCommand}</Code>
+                <Text size="xs" c="dimmed">Linux x86_64 と macOS arm64 に対応しています。監視対象ホストのターミナルで実行してください。clone、MoonBit、C 開発環境は不要です。</Text>
+              </Stack>
+            </details>
+          </Paper>
+        </section>
 
         <section>
           <SectionHeading eyebrow="PENDING APPROVAL" title="承認待ち" detail={`${pendingAgents.length} 件`} />
@@ -268,25 +292,6 @@ function App() {
             </Group>
           </Paper>)}</Stack>}
         </section>
-
-        {state === 'loading' && <Alert color="teal" title="読み込み中" icon={<span className="loading-mark">◌</span>}>メトリクスを読み込んでいます…</Alert>}
-        {state === 'error' && <Alert color="red" title="データを取得できませんでした">
-          <Text size="sm">{error}</Text>
-          {error === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
-          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => setRefreshKey((value) => value + 1)}>再試行</Button>
-        </Alert>}
-        {state === 'ready' && hosts.length === 0 && <Paper className="empty-state" withBorder p="xl"><Text className="empty-icon">⌁</Text><Title order={2}>ホストがまだありません</Title><Text c="dimmed" size="sm">Agent の申請を承認すると、メトリクスが届き始めます。</Text></Paper>}
-        {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
-        {state === 'ready' && current && <section>
-          <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
-          <SimpleGrid className="metric-grid" cols={{ base: 2, md: 3, xl: 5 }} spacing="sm" mt="sm" aria-label="最新メトリクス">
-            {cards.map((card) => <Paper className={`metric-card ${card.tone}`} withBorder p="md" key={card.label}>
-              <Text className="metric-label" size="xs" c="dimmed">{card.label}</Text><Text className="metric-value" fw={600}>{card.value}</Text>
-            </Paper>)}
-          </SimpleGrid>
-          <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail="1 分間隔 · 1 時間" />
-          <Charts metrics={metrics} />
-        </section>}
       </Stack>
       <Text className="app-footer" ta="center">cfmon <span>·</span> ホストの状態をシンプルに可視化</Text>
     </AppShell.Main>
