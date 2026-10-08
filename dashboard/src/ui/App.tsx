@@ -70,12 +70,19 @@ function App() {
   const [installCopyError, setInstallCopyError] = useState('');
   const [navOpened, navHandlers] = useDisclosure(false);
   const generation = useRef(0);
+  const metricsCache = useRef(new Map<string, Metric[]>());
   const selectedHost = hosts.find((host) => host.id === selectedId);
   const agentInstallCommand = `curl -fsSL https://raw.githubusercontent.com/OJII3/cfmon/main/scripts/install-agent.sh | sh -s -- '${window.location.origin}/api/v1/ingest'`;
 
   const refresh = useCallback(async (signal: AbortSignal, run: number) => {
     if (run !== generation.current) return;
-    setState((current) => current === 'ready' ? current : 'loading');
+    const cachedMetrics = metricsCache.current.get(selectedId);
+    if (cachedMetrics) {
+      setMetrics(cachedMetrics);
+      setState('ready');
+    } else {
+      setState((current) => current === 'ready' ? current : 'loading');
+    }
     const agentRequest = fetchAgents(signal).then((response) => {
       if (!signal.aborted && run === generation.current) {
         setAgents(response.agents);
@@ -91,13 +98,21 @@ function App() {
       if (signal.aborted || run !== generation.current) return;
       setHosts(response.hosts);
       const preferred = response.hosts.find((host) => host.id === selectedId) ?? response.hosts[0];
-      if (preferred?.id !== selectedId) setMetrics([]);
       setSelectedId(preferred?.id ?? '');
       if (!preferred) {
         setMetrics([]);
       } else {
+        const cachedMetrics = metricsCache.current.get(preferred.id);
+        if (cachedMetrics) {
+          setMetrics(cachedMetrics);
+          setState('ready');
+        } else {
+          setMetrics([]);
+          setState('loading');
+        }
         const detail = await fetchMetrics(preferred.id, signal);
         if (signal.aborted || run !== generation.current) return;
+        metricsCache.current.set(preferred.id, detail.metrics);
         setMetrics(detail.metrics);
       }
       setState('ready');
@@ -106,7 +121,7 @@ function App() {
     } catch (cause) {
       if (signal.aborted || run !== generation.current) return;
       setError(cause instanceof Error ? cause.message : 'データを取得できませんでした');
-      setState('error');
+      setState(metricsCache.current.has(selectedId) ? 'ready' : 'error');
     }
     await agentRequest;
   }, [selectedId]);
@@ -189,8 +204,9 @@ function App() {
             onClick={() => {
               navHandlers.close();
               if (host.id === selectedId) return;
-              setMetrics([]);
-              setState('loading');
+              const cachedMetrics = metricsCache.current.get(host.id);
+              setMetrics(cachedMetrics ?? []);
+              setState(cachedMetrics ? 'ready' : 'loading');
               setSelectedId(host.id);
             }}
           />)}
