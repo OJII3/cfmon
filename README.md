@@ -17,7 +17,7 @@ Linux / macOS host → MoonBit Agent → 署名付き HTTPS → Worker → Analy
 
 Cloudflare の設定・リソース作成・デプロイには `cf` CLI を使います。Analytics SQL binding を含む `cloudflare.config.ts` に移行済みで、初回認証は1回です。ビルドは `cf` がWrangler bundlerへ委譲します。
 
-Agent は Linux x86_64 と macOS arm64 / x86_64 に対応します。温度、サービス状態、アラート、R2 はまだ含みません。
+Agent は Linux x86_64 と macOS arm64 に対応します。温度、サービス状態、アラート、R2 はまだ含みません。
 
 ## 初回セットアップ
 
