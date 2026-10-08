@@ -217,7 +217,7 @@ export async function loginAndSelectAccount({ runCf = defaultRunCf, selectAccoun
 
   const accounts = listOf(command(runCf, ['accounts', 'list', '--per-page', '100']));
   const envAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const existing = envAccountId && accounts.find((account) => account.id === envAccountId);
+  const existing = accounts.find((account) => account.id === envAccountId);
   const account = existing ?? await chooseAccount(accounts, selectAccount);
   if (typeof account.id !== 'string' || !account.id) throw new Error('Cloudflare account IDを取得できませんでした。');
   return { accountId: account.id, email };
