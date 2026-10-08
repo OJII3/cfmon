@@ -73,6 +73,25 @@ async function signedRequest(path: string, body: unknown, nonce = crypto.randomU
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); writeDataPoint.mockReset(); assetsFetch.mockClear(); });
 
 describe("Worker auth and query", () => {
+  it("redirects to the Cloudflare Access login page and rejects external return URLs", async () => {
+    const localEnv = { ...env(), ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com", ACCESS_AUD: "audience" };
+    const login = await app.fetch(new Request("https://cfmon.test/api/v1/auth/login?redirect_url=%2Fhosts%3Fview%3Dcpu"), localEnv);
+    expect(login.status).toBe(302);
+    expect(login.headers.get("Location")).toBe("https://team.cloudflareaccess.com/cdn-cgi/access/login/cfmon.test?kid=audience&redirect_url=%2Fhosts%3Fview%3Dcpu");
+    const unsafe = await app.fetch(new Request("https://cfmon.test/api/v1/auth/login?redirect_url=https%3A%2F%2Fevil.test"), localEnv);
+    expect(unsafe.status).toBe(400);
+  });
+
+  it("keeps Analytics SQL failures generic for clients while logging diagnostics", async () => {
+    const localEnv = env();
+    vi.mocked(localEnv.ANALYTICS_SQL.query).mockRejectedValueOnce(new Error("dataset unavailable"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await app.fetch(new Request("http://localhost/api/v1/hosts"), localEnv);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "upstream_unavailable" });
+    expect(error).toHaveBeenCalledWith("Analytics SQL query failed", { kind: "hosts", message: "dataset unavailable" });
+  });
+
   it("uses the Analytics SQL binding and fails closed without Access configuration", async () => {
     const localEnv = env();
     const query = vi.mocked(localEnv.ANALYTICS_SQL.query);
@@ -81,6 +100,11 @@ describe("Worker auth and query", () => {
     expect(await response.json()).toEqual({ hosts: [{ id: "bronya", hostname: "bronya", os: "linux", last_seen: "2026-10-07T12:00:00.000Z" }] });
     expect(query.mock.calls[0][0].query).toContain("events.analyticsEngine.cfmon_metrics");
     expect(query.mock.calls[0][0].query).not.toContain("FORMAT JSON");
+    const metricsResponse = await app.fetch(new Request("http://localhost/api/v1/hosts/bronya/metrics"), localEnv);
+    expect(metricsResponse.status).toBe(200);
+    expect(query.mock.calls[1][0].query).toContain('"sampleInterval"');
+    expect(query.mock.calls[1][0].query).not.toContain("_sample_interval");
+    expect(query.mock.calls[1][0].params).toEqual({ host: "bronya" });
     expect((await app.fetch(new Request("https://cfmon.test/api/v1/hosts"), env())).status).toBe(401);
   });
 

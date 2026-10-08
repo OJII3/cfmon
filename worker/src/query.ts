@@ -20,8 +20,8 @@ export async function handleQuery(
   if (kind === "metrics" && !isValidHostId(id ?? "")) return json({ error: "invalid_host_id" }, 400);
 
   const query = kind === "hosts"
-    ? `SELECT index1 AS id, argMax(blob1, timestamp) AS hostname, argMax(blob2, timestamp) AS os, max(timestamp) AS last_seen FROM events.analyticsEngine.cfmon_metrics WHERE timestamp >= NOW() - INTERVAL '1' DAY GROUP BY index1 ORDER BY last_seen DESC LIMIT 1000`
-    : `SELECT toStartOfInterval(timestamp, INTERVAL '1' MINUTE) AS bucket, SUM(_sample_interval * double1) / SUM(_sample_interval) AS cpu, SUM(_sample_interval * double2) / SUM(_sample_interval) AS memory, SUM(_sample_interval * double3) / SUM(_sample_interval) AS load1, SUM(_sample_interval * double4) / SUM(_sample_interval) AS disk, SUM(_sample_interval * double5) / SUM(_sample_interval) AS rx_bps, SUM(_sample_interval * double6) / SUM(_sample_interval) AS tx_bps, SUM(_sample_interval * double7) / SUM(_sample_interval) AS uptime FROM events.analyticsEngine.cfmon_metrics WHERE index1 = $host AND timestamp >= NOW() - INTERVAL '1' HOUR GROUP BY bucket ORDER BY bucket DESC LIMIT 60`;
+    ? `SELECT index1 AS id, argMax(blob1, timestamp) AS hostname, argMax(blob2, timestamp) AS os, argMax(timestamp, timestamp) AS last_seen FROM events.analyticsEngine.cfmon_metrics WHERE timestamp >= NOW() - INTERVAL '1' DAY GROUP BY index1 ORDER BY last_seen DESC LIMIT 1000`
+    : `SELECT toStartOfInterval(timestamp, INTERVAL '1' MINUTE) AS bucket, SUM("sampleInterval" * double1) / SUM("sampleInterval") AS cpu, SUM("sampleInterval" * double2) / SUM("sampleInterval") AS memory, SUM("sampleInterval" * double3) / SUM("sampleInterval") AS load1, SUM("sampleInterval" * double4) / SUM("sampleInterval") AS disk, SUM("sampleInterval" * double5) / SUM("sampleInterval") AS rx_bps, SUM("sampleInterval" * double6) / SUM("sampleInterval") AS tx_bps, SUM("sampleInterval" * double7) / SUM("sampleInterval") AS uptime FROM events.analyticsEngine.cfmon_metrics WHERE index1 = $host AND timestamp >= NOW() - INTERVAL '1' HOUR GROUP BY bucket ORDER BY bucket DESC LIMIT 60`;
 
   let rows: Record<string, unknown>[];
   try {
@@ -30,7 +30,8 @@ export async function handleQuery(
       ...(kind === "metrics" ? { params: { host: id ?? "" } } : {}),
     });
     rows = result.data;
-  } catch {
+  } catch (error) {
+    console.error("Analytics SQL query failed", { kind, message: error instanceof Error ? error.message : String(error) });
     return json({ error: "upstream_unavailable" }, 502);
   }
 

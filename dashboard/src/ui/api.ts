@@ -19,9 +19,11 @@ export type Metric = {
 };
 export type HostMetrics = { host: string; metrics: Metric[] };
 
+export const ACCESS_LOGIN_REQUIRED_MESSAGE = 'Cloudflare Access のログインが必要です。ログイン画面を開き、ログイン後に再読み込みしてください。';
+
 export class AccessLoginRequiredError extends Error {
   constructor() {
-    super('Cloudflare Access のログインが必要です。ログイン画面を開き、ログイン後に再読み込みしてください。');
+    super(ACCESS_LOGIN_REQUIRED_MESSAGE);
     this.name = 'AccessLoginRequiredError';
   }
 }

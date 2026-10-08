@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent, type Host, type Metric } from './api';
+import { ACCESS_LOGIN_REQUIRED_MESSAGE, AccessLoginRequiredError, approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent, type Host, type Metric } from './api';
 import { Charts } from './Charts';
 
 type LoadState = 'loading' | 'ready' | 'error';
@@ -23,7 +23,7 @@ const formatAge = (value: string) => {
   return `${Math.floor(seconds / 86400)}日前`;
 };
 const formatFingerprint = (fingerprint: string) => fingerprint.match(/.{1,4}/g)?.join(' ') ?? fingerprint;
-const accessLoginUrl = () => `/cdn-cgi/access/login?redirect_url=${encodeURIComponent(window.location.href)}`;
+const accessLoginUrl = () => `/api/v1/auth/login?redirect_url=${encodeURIComponent(window.location.href)}`;
 
 function App() {
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -114,7 +114,7 @@ function App() {
       setRefreshKey((value) => value + 1);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : '';
-      setMutationError(message.includes('expired') || message.includes('pending_agent_not_found')
+      setMutationError(cause instanceof AccessLoginRequiredError ? cause.message : message.includes('expired') || message.includes('pending_agent_not_found')
         ? '申請の期限が切れています。Agent を再起動して新しい申請を送ってください。'
         : message.includes('conflict') || message.includes('host_already_approved')
           ? 'このホストはすでに登録されています。登録済み Agent を確認してください。'
@@ -149,8 +149,8 @@ function App() {
       </section>
 
       <section className="section-title agent-section-title"><div><span className="eyebrow">AGENT ACCESS</span><h2>Agent の登録</h2></div><span>承認前の Agent はデータを送信できません</span></section>
-      {agentError && <div className="notice error-notice"><strong>Agent 一覧を取得できませんでした</strong><p>{agentError}</p><a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a><button onClick={() => setRefreshKey((value) => value + 1)}>再試行</button></div>}
-      {mutationError && <div className="notice error-notice mutation-error"><strong>操作を完了できませんでした</strong><p>{mutationError}</p><a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a></div>}
+      {agentError && <div className="notice error-notice"><strong>Agent 一覧を取得できませんでした</strong><p>{agentError}</p>{agentError === ACCESS_LOGIN_REQUIRED_MESSAGE && <a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a>}<button onClick={() => setRefreshKey((value) => value + 1)}>再試行</button></div>}
+      {mutationError && <div className="notice error-notice mutation-error"><strong>操作を完了できませんでした</strong><p>{mutationError}</p>{mutationError === ACCESS_LOGIN_REQUIRED_MESSAGE && <a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a>}</div>}
       {!agentError && pendingAgents.length === 0 && <div className="agent-empty">承認待ちの Agent はありません。</div>}
       {pendingAgents.map((agent) => <article className="agent-card pending-agent" key={agent.public_key}>
         <div className="agent-card-heading"><div><span className="agent-status pending">承認待ち</span><h3>{agent.host}</h3><p>{agent.os || 'OS 不明'} · 登録申請 {formatAge(agent.last_requested_at)}</p></div></div>
@@ -167,7 +167,7 @@ function App() {
       </article>)}</div>}
 
       {state === 'loading' && <div className="notice"><span className="spinner" />メトリクスを読み込んでいます…</div>}
-      {state === 'error' && <div className="notice error-notice"><strong>データを取得できませんでした</strong><p>{error}</p><a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a><button onClick={() => setRefreshKey((value) => value + 1)}>再試行</button></div>}
+      {state === 'error' && <div className="notice error-notice"><strong>データを取得できませんでした</strong><p>{error}</p>{error === ACCESS_LOGIN_REQUIRED_MESSAGE && <a className="access-login-link" href={accessLoginUrl()}>Cloudflare Access にログイン</a>}<button onClick={() => setRefreshKey((value) => value + 1)}>再試行</button></div>}
       {state === 'ready' && hosts.length === 0 && <div className="empty-state"><div className="empty-icon">⌁</div><h2>ホストがまだありません</h2><p>Agent の申請を承認すると、メトリクスが届き始めます。</p></div>}
       {state === 'ready' && hosts.length > 0 && !current && <div className="notice">このホストのメトリクスはまだありません。</div>}
       {state === 'ready' && current && <>
