@@ -27,7 +27,10 @@
           packages = [
             pkgs.bun
             pkgs.moonbit-bin.latest
-            pkgs.nodejs-slim
+            pkgs.nodejs
+            pkgs.curl
+            pkgs.openssl
+            pkgs.pkg-config
           ];
         };
       };

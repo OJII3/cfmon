@@ -1,0 +1,35 @@
+# This workflow is managed by gh actions-lock.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31.11.1
+      - name: Install JavaScript dependencies
+        run: |
+          nix develop -c sh -c 'cd worker && npm ci'
+          nix develop -c sh -c 'cd dashboard && npm ci'
+      - name: Check Worker and build Dashboard
+        run: |
+          nix develop -c sh -c 'cd worker && npm run typecheck && npm test'
+          nix develop -c sh -c 'cd dashboard && npm run build'
+          nix develop -c sh -c 'cd worker && npx cf deploy --dry-run'
+      - name: Check and build native agent
+        run: |
+          nix develop -c sh -c 'cd agent && moon check --target native && moon test --target native && moon build --target native'
+          nix develop -c sh -c 'cd agent && moon run src --target native -- --print'
+      - name: Test browser setup orchestration
+        run: nix develop -c node --test scripts/setup-cloudflare.test.mjs
+      - name: Test native Agent pairing with local D1
+        run: nix develop -c npm run test:pairing

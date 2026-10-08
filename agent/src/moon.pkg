@@ -1,0 +1,12 @@
+pkgtype(kind: "executable")
+
+import {
+  "moonbitlang/core/string",
+  "moonbitlang/core/env",
+  "moonbitlang/core/encoding/utf8",
+}
+
+options(
+  "native-stub": [ "linux.c" ],
+  link: { "native": { "cc-link-flags": "-lcurl -lcrypto" } },
+)
