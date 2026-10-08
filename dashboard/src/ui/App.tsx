@@ -288,7 +288,7 @@ function App() {
           <SectionHeading eyebrow="REGISTERED AGENTS" title="登録済み Agent" detail={`${approvedAgents.length} 台`} />
           {approvedAgents.length > 0 && <Stack gap="xs" mt="sm">{approvedAgents.map((agent) => <Paper withBorder p="sm" key={agent.public_key}>
             <Group justify="space-between" wrap="wrap">
-              <Group gap="sm" wrap="nowrap"><Badge color="teal" variant="light">承認済み</Badge><Box><Text fw={600} size="sm" truncate>{agent.host}</Text><Text size="xs" c="dimmed">{agent.os || 'OS 不明'}</Text></Box></Group>
+              <Group gap="sm" wrap="nowrap"><Badge color="teal" variant="light">承認済み</Badge><Box><Text fw={600} size="sm" truncate>{agent.host}</Text><Text size="xs" c="dimmed">{agent.os || 'OS 不明'} · 最終通信 {formatAge(agent.last_requested_at)}</Text></Box></Group>
               <Button variant="light" color="red" size="xs" disabled={!!busyAgent} loading={busyAgent === agent.public_key} onClick={() => void mutateAgent(agent, 'revoke')}>登録解除</Button>
             </Group>
           </Paper>)}</Stack>}
