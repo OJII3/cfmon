@@ -59,6 +59,22 @@ async function saveLocalConfig({ accountId, databaseId, teamDomain, aud }) {
   await writeFile(envPath, `${rows.join('\n')}\n`, { mode: 0o600 });
 }
 
+async function loadLocalConfig() {
+  const contents = await readFile(envPath, 'utf8');
+  const values = Object.fromEntries(contents.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).map((line) => {
+    const separator = line.indexOf('=');
+    return [line.slice(0, separator), line.slice(separator + 1)];
+  }));
+  const config = {
+    CLOUDFLARE_ACCOUNT_ID: values.CLOUDFLARE_ACCOUNT_ID,
+    CFMON_D1_ID: values.CFMON_D1_ID,
+    CFMON_ACCESS_TEAM_DOMAIN: values.CFMON_ACCESS_TEAM_DOMAIN,
+    CFMON_ACCESS_AUD: values.CFMON_ACCESS_AUD,
+  };
+  Object.assign(process.env, Object.fromEntries(Object.entries(config).filter(([, value]) => typeof value === 'string')));
+  return config;
+}
+
 async function deploy() {
   const result = runCf(['deploy'], { capture: true });
   process.stdout.write(result.stdout);
@@ -73,6 +89,10 @@ async function main() {
   if (setup && dryRun) throw new Error('--setup と --dry-run は同時に指定できません');
   run('npm', ['ci'], worker);
   if (setup) {
+    if (!process.env.CLOUDFLARE_ACCOUNT_ID) {
+      const previous = await readFile(envPath, 'utf8').catch(() => '');
+      process.env.CLOUDFLARE_ACCOUNT_ID = previous.match(/^CLOUDFLARE_ACCOUNT_ID=(.+)$/m)?.[1] ?? '';
+    }
     const { accountId, email } = await loginAndSelectAccount();
     const localEnv = { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId };
     delete localEnv.CLOUDFLARE_API_TOKEN;
@@ -87,6 +107,7 @@ async function main() {
     const databaseId = database?.uuid ?? database?.id;
     if (typeof databaseId !== 'string' || !databaseId) throw new Error('D1のIDを取得できませんでした');
     await saveLocalConfig({ accountId, databaseId });
+    await loadLocalConfig();
 
     run('npm', ['ci'], resolve(root, 'dashboard'));
     run('npm', ['run', 'build'], resolve(root, 'dashboard'));
@@ -95,6 +116,7 @@ async function main() {
     let url = await deploy();
     const { teamDomain, aud } = await configureAccess({ accountId, email, hostname: url });
     await saveLocalConfig({ accountId, databaseId, teamDomain, aud });
+    await loadLocalConfig();
     console.log('Access 認証を反映しています…');
     url = await deploy();
     await mkdir(resolve(root, '.cfmon'), { recursive: true });
@@ -103,10 +125,17 @@ async function main() {
     return;
   }
 
-  if (!dryRun) {
-    const local = await readFile(envPath, 'utf8').catch(() => {
+  let local;
+  try {
+    local = await readFile(envPath, 'utf8');
+    await loadLocalConfig();
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (!dryRun) {
       throw new Error('初回は npm run setup を実行してください');
-    });
+    }
+  }
+  if (!dryRun && local) {
     if (!/^CFMON_D1_ID=(?!0+$).+/m.test(local) || !/^CFMON_ACCESS_TEAM_DOMAIN=(?!setup-pending).+/m.test(local) || !/^CFMON_ACCESS_AUD=(?!setup-pending$).+/m.test(local)) {
       throw new Error('セットアップが未完了です。npm run setup を実行してください');
     }
