@@ -23,32 +23,35 @@ Agent は Linux x86_64 と macOS arm64 / x86_64 に対応します。温度、�
 
 Cloudflare アカウントで Workers Analytics Engine を有効にしてください。照会には Analytics SQL binding を使用します（SQL API は Beta）。Worker 自身のアカウント権限で照会するため、Analytics 用 API トークンは不要です。
 
-リポジトリのルートで次を実行します。
+Nix が使える環境なら、リポジトリを clone せずに初回セットアップできます。
 
 ```sh
-nix develop
-npm run setup
+nix run github:OJII3/cfmon -- setup
 ```
 
-初回は `cf` で1回だけ認可します。URL と確認コードが表示されるので、ローカル・SSH・コンテナのどこからでも、別端末のブラウザで開いて承認できます。コードの有効時間内に承認してください。複数のアカウントがある場合だけ、表示された一覧から使用するアカウントを選びます。
+Cloudflare OAuth の認可 URL を開いて承認してください。複数のアカウントがある場合だけ、表示された一覧から使用するアカウントを選びます。Nix がソースと Node.js を用意し、依存関係のインストールからデプロイまで実行します。設定は `$XDG_CONFIG_HOME/cfmon/`（未設定なら `$HOME/.config/cfmon/`）に保存されるため、シェルを閉じても更新に使えます。
+
+初回は `cf` で1回だけ認可します。URL と確認コードが表示されるので、ローカル・SSH・コンテナのどこからでも、別端末のブラウザで開いて承認できます。コードの有効時間内に承認してください。
 
 メールアドレス、アカウント ID、Worker URL、Access チームドメイン、AUD は自動取得します。active zone がある場合、複数なら一覧から選び、ひとつなら自動選択します。続けてサブドメインを入力し、`<入力値>.<zone>` を Worker の Custom Domain に割り当てます。空欄なら `cfmon` を使います。DNS レコードと証明書は Cloudflare が作成し、`workers.dev` は無効にします。zone がない場合は従来どおり `workers.dev` を使います。
 
 スクリプトは D1 の作成・マイグレーション、Dashboard ビルド、Worker デプロイ、Access アプリ設定を行います。既存の reusable Allow policy がある場合は選択でき、全員・One-time PIN だけ・Service Token 全許可の policy は候補から除外します。既存 policy を選ばない場合は、ログイン中のメールアドレスだけを許可する設定を使います。Agent 用の2パスだけを Access の対象外にします。公開設定もシークレットも手入力しません。
 
-公開設定は `worker/.env`、接続先は `.cfmon/deployment.json` に保存します。どちらも Git には含めません。OAuth 認証情報は `cf` が管理します。Access が未設定・JWT が不正な場合、閲覧と承認 API は拒否されます。実アカウントでの初回実行には Analytics Engine の有効化と Cloudflare 側の利用権限が必要です。
+Nix CLI の公開設定と接続先は `$XDG_CONFIG_HOME/cfmon/`（未設定なら `$HOME/.config/cfmon/`）に保存されます。clone 済みの開発環境では `worker/.env` と `.cfmon/deployment.json` に保存します。OAuth 認証情報は `cf` が管理します。Access が未設定・JWT が不正な場合、閲覧と承認 API は拒否されます。実アカウントでの初回実行には Analytics Engine の有効化と Cloudflare 側の利用権限が必要です。
 
-更新時は同じ環境で次の1コマンドです。
+更新も clone や `nix develop` は不要で、次の1コマンドです。実行時点の flake ソースを使ってビルド・デプロイします。
 
 ```sh
-npm run deploy
+nix run github:OJII3/cfmon -- deploy
 ```
 
 ビルドと設定の検証だけなら、Cloudflare に接続せずに次を実行できます。
 
 ```sh
-npm run deploy -- --dry-run
+nix run github:OJII3/cfmon -- deploy --dry-run
 ```
+
+従来どおり clone 済みの開発環境から `npm run setup` / `npm run deploy` を使うこともできます。
 
 ## Agent を登録する
 
