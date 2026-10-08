@@ -62,6 +62,7 @@
               config_dir="''${XDG_CONFIG_HOME:-$HOME/.config}/cfmon"
               mkdir -p "$runtime_dir" "$config_dir"
               cp -R "${self}/." "$runtime_dir/"
+              chmod -R u+rwX "$runtime_dir"
               if [[ -f "$config_dir/worker.env" ]]; then
                 cp "$config_dir/worker.env" "$runtime_dir/worker/.env"
               fi
