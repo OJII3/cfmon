@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   Anchor,
   Alert,
@@ -20,10 +20,10 @@ import {
   Title,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { ACCESS_LOGIN_REQUIRED_MESSAGE, AccessLoginRequiredError, approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent, type Host, type Metric } from './api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ACCESS_LOGIN_REQUIRED_MESSAGE, AccessLoginRequiredError, approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent } from './api';
 import { Charts } from './Charts';
 
-type LoadState = 'loading' | 'ready' | 'error';
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
 const formatUptime = (seconds: number) => {
   const days = Math.floor(seconds / 86400);
@@ -54,76 +54,47 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
 }
 
 function App() {
-  const [hosts, setHosts] = useState<Host[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [metrics, setMetrics] = useState<Metric[]>([]);
-  const [state, setState] = useState<LoadState>('loading');
-  const [error, setError] = useState('');
-  const [agentError, setAgentError] = useState('');
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [busyAgent, setBusyAgent] = useState('');
   const [mutationError, setMutationError] = useState('');
   const [installCopied, setInstallCopied] = useState(false);
   const [installCopyError, setInstallCopyError] = useState('');
   const [navOpened, navHandlers] = useDisclosure(false);
-  const generation = useRef(0);
-  const selectedHost = hosts.find((host) => host.id === selectedId);
+  const queryClient = useQueryClient();
+  const hostsQuery = useQuery({
+    queryKey: ['hosts'],
+    queryFn: ({ signal }) => fetchHosts(signal),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  const agentsQuery = useQuery({
+    queryKey: ['agents'],
+    queryFn: ({ signal }) => fetchAgents(signal),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  const hosts = hostsQuery.data?.hosts ?? [];
+  const agents = agentsQuery.data?.agents ?? [];
+  const selectedHost = hosts.find((host) => host.id === selectedId) ?? hosts[0];
+  const metricsQuery = useQuery({
+    queryKey: ['metrics', selectedHost?.id],
+    queryFn: ({ signal }) => fetchMetrics(selectedHost!.id, signal),
+    enabled: !!selectedHost,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+  const metrics = metricsQuery.data?.metrics ?? [];
+  const error = hostsQuery.error ?? metricsQuery.error;
+  const errorMessage = error instanceof Error ? error.message : 'データを取得できませんでした';
+  const isLoading = hostsQuery.isPending || (!!selectedHost && metricsQuery.isPending);
+  const hasError = (!hostsQuery.data && hostsQuery.isError) || (!!selectedHost && !metricsQuery.data && metricsQuery.isError);
+  const state = isLoading ? 'loading' : hasError ? 'error' : 'ready';
+  const agentError = agentsQuery.isError
+    ? agentsQuery.error instanceof Error ? agentsQuery.error.message : 'Agent 一覧を取得できませんでした'
+    : '';
+  const updatedAt = metricsQuery.dataUpdatedAt ? new Date(metricsQuery.dataUpdatedAt) : null;
   const agentInstallCommand = `curl -fsSL https://raw.githubusercontent.com/OJII3/cfmon/main/scripts/install-agent.sh | sh -s -- '${window.location.origin}/api/v1/ingest'`;
-
-  const refresh = useCallback(async (signal: AbortSignal, run: number) => {
-    if (run !== generation.current) return;
-    setState((current) => current === 'ready' ? current : 'loading');
-    const agentRequest = fetchAgents(signal).then((response) => {
-      if (!signal.aborted && run === generation.current) {
-        setAgents(response.agents);
-        setAgentError('');
-      }
-    }).catch((cause) => {
-      if (!signal.aborted && run === generation.current) {
-        setAgentError(cause instanceof Error ? cause.message : 'Agent 一覧を取得できませんでした');
-      }
-    });
-    try {
-      const response = await fetchHosts(signal);
-      if (signal.aborted || run !== generation.current) return;
-      setHosts(response.hosts);
-      const preferred = response.hosts.find((host) => host.id === selectedId) ?? response.hosts[0];
-      if (preferred?.id !== selectedId) setMetrics([]);
-      setSelectedId(preferred?.id ?? '');
-      if (!preferred) {
-        setMetrics([]);
-      } else {
-        const detail = await fetchMetrics(preferred.id, signal);
-        if (signal.aborted || run !== generation.current) return;
-        setMetrics(detail.metrics);
-      }
-      setState('ready');
-      setError('');
-      setUpdatedAt(new Date());
-    } catch (cause) {
-      if (signal.aborted || run !== generation.current) return;
-      setError(cause instanceof Error ? cause.message : 'データを取得できませんでした');
-      setState('error');
-    }
-    await agentRequest;
-  }, [selectedId]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const run = ++generation.current;
-    let inFlight = false;
-    const tick = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try { await refresh(controller.signal, run); } finally { inFlight = false; }
-    };
-    void tick();
-    const timer = window.setInterval(() => void tick(), 30_000);
-    return () => { controller.abort(); window.clearInterval(timer); };
-  }, [refresh, refreshKey]);
 
   const current = metrics.at(-1);
   const cards = current ? [
@@ -143,7 +114,7 @@ function App() {
       if (action === 'approve') await approveAgent(agent);
       else await revokeAgent(agent);
       setChecked((current) => ({ ...current, [agent.public_key]: false }));
-      setRefreshKey((value) => value + 1);
+      void queryClient.invalidateQueries();
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : '';
       setMutationError(cause instanceof AccessLoginRequiredError ? cause.message : message.includes('expired') || message.includes('pending_agent_not_found')
@@ -151,7 +122,7 @@ function App() {
         : message.includes('conflict') || message.includes('host_already_approved')
           ? 'このホストはすでに登録されています。登録済み Agent を確認してください。'
           : message || '操作に失敗しました。最新状態を再読み込みしてください。');
-      setRefreshKey((value) => value + 1);
+      void queryClient.invalidateQueries();
     } finally {
       setBusyAgent('');
     }
@@ -184,13 +155,11 @@ function App() {
             key={host.id}
             label={host.hostname}
             description={host.os || 'OS 不明'}
-            active={selectedId === host.id}
+            active={selectedHost?.id === host.id}
             leftSection={<ThemeIcon size={8} radius="xl" color="teal" />}
             onClick={() => {
               navHandlers.close();
-              if (host.id === selectedId) return;
-              setMetrics([]);
-              setState('loading');
+              if (host.id === selectedHost?.id) return;
               setSelectedId(host.id);
             }}
           />)}
@@ -203,7 +172,7 @@ function App() {
       <Group justify="space-between" h="100%">
         <Group gap="sm"><Burger opened={navOpened} onClick={navHandlers.toggle} hiddenFrom="sm" size="sm" aria-label="ホスト一覧を開く" /><Text size="sm" c="dimmed">システム / ホスト</Text></Group>
         <Group gap="md"><Text visibleFrom="sm" size="xs" c="dimmed" ff="monospace">{updatedAt ? `更新 ${updatedAt.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '接続中'}</Text>
-          <Button variant="default" size="xs" onClick={() => setRefreshKey((value) => value + 1)} leftSection={<Text component="span" c="teal" size="lg">↻</Text>}>更新</Button>
+          <Button variant="default" size="xs" onClick={() => void queryClient.invalidateQueries()} leftSection={<Text component="span" c="teal" size="lg">↻</Text>}>更新</Button>
         </Group>
       </Group>
     </AppShell.Header>
@@ -221,9 +190,9 @@ function App() {
 
         {state === 'loading' && <Alert color="teal" title="読み込み中" icon={<Text c="teal">◌</Text>}>メトリクスを読み込んでいます…</Alert>}
         {state === 'error' && <Alert color="red" title="データを取得できませんでした">
-          <Text size="sm">{error}</Text>
-          {error === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
-          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => setRefreshKey((value) => value + 1)}>再試行</Button>
+          <Text size="sm">{errorMessage}</Text>
+          {errorMessage === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
+          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => void queryClient.invalidateQueries()}>再試行</Button>
         </Alert>}
         {state === 'ready' && hosts.length === 0 && <Paper withBorder p="xl" ta="center"><ThemeIcon size="xl" variant="light" radius="md" mx="auto" mb="md">⌁</ThemeIcon><Title order={2}>ホストがまだありません</Title><Text c="dimmed" size="sm">Agent の申請を承認すると、メトリクスが届き始めます。</Text></Paper>}
         {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
@@ -241,7 +210,7 @@ function App() {
         {agentError && <Alert color="red" title="Agent 一覧を取得できませんでした" withCloseButton={false}>
           <Text size="sm">{agentError}</Text>
           {agentError === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
-          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => setRefreshKey((value) => value + 1)}>再試行</Button>
+          <Button variant="light" color="red" size="xs" mt="xs" onClick={() => void queryClient.invalidateQueries({ queryKey: ['agents'] })}>再試行</Button>
         </Alert>}
         {mutationError && <Alert color="red" title="操作を完了できませんでした">
           <Text size="sm">{mutationError}</Text>
