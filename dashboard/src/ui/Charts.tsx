@@ -1,5 +1,6 @@
 import type { Metric } from './api';
 import { Box, Center, Grid, Group, Paper, Text, ThemeIcon } from '@mantine/core';
+import { memo } from 'react';
 
 type Props = { metrics: Metric[] };
 const rxColor = 'var(--mantine-color-teal-6)';
@@ -58,10 +59,10 @@ function NetworkChart({ metrics }: Props) {
   </Paper></Grid.Col>;
 }
 
-export function Charts({ metrics }: Props) {
+export const Charts = memo(function Charts({ metrics }: Props) {
   return <Grid gap="sm">
     <LineChart metrics={metrics} field="cpu" color={rxColor} label="CPU 使用率" />
     <LineChart metrics={metrics} field="memory" color={txColor} label="メモリ使用率" />
     <NetworkChart metrics={metrics} />
   </Grid>;
-}
+});
