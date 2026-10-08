@@ -1,0 +1,46 @@
+# This workflow is managed by gh actions-lock.
+
+name: Release Agent
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes build-essential curl git libcurl4-openssl-dev libssl-dev pkg-config
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Build Agent
+        run: |
+          cd agent
+          moon check --target native
+          moon test --target native
+          moon build --target native --release
+          mkdir -p ../dist
+          install -m 755 _build/native/release/build/src/src.exe ../dist/cfmon-agent-linux-x86_64
+          cd ../dist
+          sha256sum cfmon-agent-linux-x86_64 > cfmon-agent-linux-x86_64.sha256
+      - name: Update latest Agent release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view cfmon-agent-latest >/dev/null 2>&1; then
+            gh release create cfmon-agent-latest \
+              --target "$GITHUB_SHA" \
+              --title "cfmon Agent (latest main)" \
+              --notes "Automatically updated native Agent build from main."
+          fi
+          gh release upload cfmon-agent-latest \
+            dist/cfmon-agent-linux-x86_64 \
+            dist/cfmon-agent-linux-x86_64.sha256 \
+            --clobber

@@ -50,15 +50,17 @@ npm run deploy -- --dry-run
 
 ## Agent を登録する
 
-監視する Linux ホストで MoonBit、C コンパイラ、libcurl・OpenSSL の開発パッケージを用意します。このリポジトリの Nix devShell に含まれています。
+Dashboard の「インストールコマンドをコピー」を押し、監視する Linux x86_64 ホストのターミナルで実行します。Worker URL はコマンドに含まれるため、入力やリポジトリの clone は不要です。
+
+インストーラーはチェックサムを検証したネイティブ Agent をダウンロードし、ユーザー領域に配置します。systemd user service が使えるホストではサービスを有効化して起動します。MoonBit、Node.js、C 開発環境は必要ありません。インストールコマンドをもう一度実行すると、最新版に更新してサービスを再起動します。
+
+Agent は初回に Ed25519 鍵を作り、公開指紋を出力して承認を待ちます。次のコマンドで指紋を確認し、Dashboard に表示された **SHA-256 指紋と一致することを確認して承認**してください。ホスト名だけでは承認しないでください。承認後にメトリクスの送信が始まります。
 
 ```sh
-npm run agent
+journalctl --user -u cfmon-agent -f
 ```
 
-セットアップと同じ環境では保存済みの Worker URL と OS の hostname を自動使用します。別ホストでも `npm run setup` を実行できます。同じアカウントの既存 D1 と Access アプリを再利用し、再デプロイして接続先を自動取得します。
-
-Agent は初回に Ed25519 鍵を作り、公開指紋を表示して承認を待ちます。Dashboard にログインし、表示された **SHA-256 指紋が Agent の出力と一致することを確認して承認**してください。ホスト名だけでは承認しないでください。承認後にメトリクスの送信が始まります。
+systemd user service がない環境では、インストーラーが表示するコマンドで Agent を起動できます。Agent は `$HOME/.local/bin/cfmon-agent`、秘密鍵は `$XDG_STATE_HOME/cfmon`（未設定時 `$HOME/.local/state/cfmon`）に保存します。
 
 - `CFMON_URL`: ingest の完全な URL。本番は HTTPS、ローカルテストのみ loopback HTTP を許可します。
 - `CFMON_HOST`: 省略時は OS の hostname。英数字で始まる1〜128文字で、英数字・`.`・`_`・`-` が使えます。ホストごとに異なる ID を使ってください。
