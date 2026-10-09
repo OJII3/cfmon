@@ -22,6 +22,7 @@ import {
   Title,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
+import { useSwipeable } from 'react-swipeable';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ACCESS_LOGIN_REQUIRED_MESSAGE, AccessLoginRequiredError, approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent, type HistoryRange } from './api';
 import { Charts } from './Charts';
@@ -65,6 +66,14 @@ function App() {
   const [installCopied, setInstallCopied] = useState(false);
   const [installCopyError, setInstallCopyError] = useState('');
   const [navOpened, navHandlers] = useDisclosure(false);
+  const openNavSwipe = useSwipeable({
+    onSwipedRight: () => navHandlers.open(),
+    delta: 50,
+  });
+  const closeNavSwipe = useSwipeable({
+    onSwipedLeft: () => navHandlers.close(),
+    delta: 50,
+  });
   const queryClient = useQueryClient();
   const hostsQuery = useQuery({
     queryKey: ['hosts'],
@@ -149,7 +158,7 @@ function App() {
     navbar={{ width: 248, breakpoint: 'sm', collapsed: { mobile: !navOpened } }}
     padding="md"
   >
-    <AppShell.Navbar p="md">
+    <AppShell.Navbar {...closeNavSwipe} p="md">
       <AppShell.Section mb="xl">
         <Anchor href="#" underline="never" c="inherit"><Group gap="sm"><ThemeIcon color="teal" radius="md">c</ThemeIcon><Box><Text fw={700}>cfmon</Text><Text size="xs" c="dimmed" ff="monospace">HOST MONITOR</Text></Box></Group></Anchor>
       </AppShell.Section>
@@ -194,7 +203,7 @@ function App() {
       </Group>
     </AppShell.Header>
 
-    <AppShell.Main>
+    <AppShell.Main {...openNavSwipe}>
       {page === 'metrics' ? <Stack gap="xl">
         <Group justify="space-between" align="center">
           <Box><Text size="xs" c="dimmed" ff="monospace">OVERVIEW / HOSTS</Text><Title order={1}>{selectedHost?.hostname ?? 'ホスト監視'}</Title>
