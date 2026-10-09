@@ -1,6 +1,6 @@
 # cfmon
 
-Linux x86_64 または macOS arm64 のホストを監視し、メトリクスを Cloudflare に保存・表示するツールです。ホストには MoonBit のネイティブ Agent をインストールします。API トークンや共有シークレットの発行・入力は不要です。
+Linux x86_64 / arm64（Raspberry Pi など）または macOS arm64 のホストを監視し、メトリクスを Cloudflare に保存・表示するツールです。ホストには MoonBit のネイティブ Agent をインストールします。API トークンや共有シークレットの発行・入力は不要です。
 
 ## セットアップ
 
@@ -15,7 +15,7 @@ nix run github:OJII3/cfmon -- setup
 ## ホストを追加する
 
 1. Dashboard にログインし、「インストールコマンドをコピー」を押します。
-2. 監視する Linux x86_64 または macOS arm64 ホストでコマンドを実行します。
+2. 監視する Linux x86_64 / arm64 または macOS arm64 ホストでコマンドを実行します。
 3. Dashboard に表示される SHA-256 指紋を確認して Agent を承認します。
 
 Agent はログイン時に自動起動します。インストール、ログ確認、鍵の管理については [Agent の運用](docs/operations.md) を参照してください。
