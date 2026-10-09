@@ -13,6 +13,7 @@ import {
   NavLink,
   Paper,
   Progress,
+  SegmentedControl,
   ScrollArea,
   SimpleGrid,
   Stack,
@@ -22,7 +23,7 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ACCESS_LOGIN_REQUIRED_MESSAGE, AccessLoginRequiredError, approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent } from './api';
+import { ACCESS_LOGIN_REQUIRED_MESSAGE, AccessLoginRequiredError, approveAgent, fetchAgents, fetchHosts, fetchMetrics, revokeAgent, type Agent, type HistoryRange } from './api';
 import { Charts } from './Charts';
 
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
@@ -57,6 +58,7 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
 function App() {
   const [selectedId, setSelectedId] = useState(() => new URLSearchParams(window.location.search).get('host') ?? '');
   const [page, setPage] = useState<'metrics' | 'devices'>('metrics');
+  const [historyRange, setHistoryRange] = useState<HistoryRange>(1);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [busyAgent, setBusyAgent] = useState('');
   const [mutationError, setMutationError] = useState('');
@@ -81,8 +83,8 @@ function App() {
   const agents = agentsQuery.data?.agents ?? [];
   const selectedHost = hosts.find((host) => host.id === selectedId) ?? hosts[0];
   const metricsQuery = useQuery({
-    queryKey: ['metrics', selectedHost?.id],
-    queryFn: ({ signal }) => fetchMetrics(selectedHost!.id, signal),
+    queryKey: ['metrics', selectedHost?.id, historyRange],
+    queryFn: ({ signal }) => fetchMetrics(selectedHost!.id, historyRange, signal),
     enabled: !!selectedHost && page === 'metrics',
     staleTime: 30_000,
     refetchInterval: 30_000,
@@ -216,7 +218,20 @@ function App() {
               {card.ratio !== undefined && <Progress value={Math.max(0, Math.min(100, card.ratio * 100))} color={card.color} size={4} radius={0} aria-label={`${card.label} 使用率 ${card.value}`} style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }} />}
             </Paper>)}
           </SimpleGrid>
-          <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail="1 分間隔 · 1 時間" />
+          <Group justify="space-between" align="end" wrap="wrap">
+            <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail={`1 分間隔 · 過去 ${historyRange} 時間`} />
+            <SegmentedControl
+              size="xs"
+              value={String(historyRange)}
+              onChange={(value) => setHistoryRange(Number(value) as HistoryRange)}
+              data={[
+                { label: '1 時間', value: '1' },
+                { label: '6 時間', value: '6' },
+                { label: '24 時間', value: '24' },
+              ]}
+              aria-label="履歴の表示範囲"
+            />
+          </Group>
           <Charts metrics={metrics} />
         </section>}
 
