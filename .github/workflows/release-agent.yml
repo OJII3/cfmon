@@ -79,3 +79,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT: ${{ matrix.artifact }}
         run: gh release upload cfmon-agent-latest "dist/cfmon-agent-$ARTIFACT" "dist/cfmon-agent-$ARTIFACT.sha256" --clobber
+
+  release-linux-arm64:
+    needs: release
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes build-essential curl git libcurl4-openssl-dev libssl-dev pkg-config
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Build Linux ARM64 Agent
+        run: |
+          cd agent
+          moon check --target native
+          moon build --target native --release
+          mkdir -p ../dist
+          install -m 755 _build/native/release/build/src/src.exe ../dist/cfmon-agent-linux-arm64
+          cd ../dist
+          sha256sum cfmon-agent-linux-arm64 > cfmon-agent-linux-arm64.sha256
+      - name: Upload Linux ARM64 Agent release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload cfmon-agent-latest dist/cfmon-agent-linux-arm64 dist/cfmon-agent-linux-arm64.sha256 --clobber
