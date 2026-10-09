@@ -18,6 +18,7 @@ export type Metric = {
   uptime: number;
 };
 export type HostMetrics = { host: string; metrics: Metric[] };
+export type HistoryRange = 1 | 6 | 24;
 
 export const ACCESS_LOGIN_REQUIRED_MESSAGE = 'Cloudflare Access のログインが必要です。ログイン画面を開き、ログイン後に再読み込みしてください。';
 
@@ -51,8 +52,8 @@ async function request<T>(path: string, signal?: AbortSignal, init: RequestInit 
 }
 
 export const fetchHosts = (signal: AbortSignal) => request<{ hosts: Host[] }>('/api/v1/hosts', signal);
-export const fetchMetrics = (id: string, signal: AbortSignal) =>
-  request<HostMetrics>(`/api/v1/hosts/${encodeURIComponent(id)}/metrics`, signal);
+export const fetchMetrics = (id: string, range: HistoryRange, signal: AbortSignal) =>
+  request<HostMetrics>(`/api/v1/hosts/${encodeURIComponent(id)}/metrics?range=${range}`, signal);
 export const fetchAgents = (signal: AbortSignal) => request<{ agents: Agent[] }>('/api/v1/agents', signal);
 export const approveAgent = (agent: Agent) => request<{ status: string }>(`/api/v1/agents/${encodeURIComponent(agent.public_key)}/approve`, undefined, {
   method: 'POST', body: JSON.stringify({ fingerprint: agent.fingerprint }),
