@@ -14,6 +14,7 @@ import {
   Paper,
   SegmentedControl,
   ScrollArea,
+  Skeleton,
   SimpleGrid,
   Stack,
   Text,
@@ -69,6 +70,28 @@ function MetricGauge({ label, value, ratio, color }: { label: string; value: str
       <Text fw={600} ff="monospace" style={{ fontSize: value.length > 6 ? 'clamp(0.65rem, 2.2vw, 0.875rem)' : 'clamp(0.9rem, 3vw, 1.25rem)', lineHeight: 1.3 }}>{value}</Text>
     </Stack>
   </Box>;
+}
+
+function MetricsLoading() {
+  return <section aria-label="メトリクスを読み込み中" aria-busy="true">
+    <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
+    <SimpleGrid cols={3} spacing="xs" mt="md" mb="xl" aria-label="最新メトリクス">
+      {['CPU', 'メモリ', 'ディスク', 'Load 1m', '稼働時間'].map((label) => <Box key={label} style={{ width: '100%', maxWidth: 136, aspectRatio: '1', marginInline: 'auto', display: 'grid', placeItems: 'center' }}>
+        <Skeleton circle width="100%" height="100%" />
+      </Box>)}
+    </SimpleGrid>
+    <Group justify="space-between" align="end" wrap="wrap">
+      <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" />
+      <SegmentedControl size="xs" value={String(1)} data={[{ label: '1 時間', value: '1' }, { label: '6 時間', value: '6' }, { label: '24 時間', value: '24' }]} disabled aria-label="履歴の表示範囲" />
+    </Group>
+    <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm" mt="sm">
+      {[0, 1, 2].map((chart) => <Paper key={chart} withBorder p="md" style={{ gridColumn: chart === 2 ? '1 / -1' : undefined }}>
+        <Group justify="space-between"><Skeleton height={18} width={120} /><Skeleton height={18} width={56} /></Group>
+        <Skeleton height={chart === 2 ? 155 : 140} mt={10} />
+        <Group mt="xs" justify="space-between"><Skeleton height={14} width={42} /><Skeleton height={14} width={42} /></Group>
+      </Paper>)}
+    </SimpleGrid>
+  </section>;
 }
 
 function App() {
@@ -221,15 +244,15 @@ function App() {
     <AppShell.Main {...openNavSwipe}>
       {page === 'metrics' ? <Stack gap="xl">
         <Group justify="space-between" align="center">
-          <Box><Text size="xs" c="dimmed" ff="monospace">OVERVIEW / HOSTS</Text><Title order={1}>{selectedHost?.hostname ?? 'ホスト監視'}</Title>
-            <Text c="dimmed" size="sm">{selectedHost ? `${selectedHost.os || 'OS 不明'} · 最終受信 ${formatSeen(selectedHost.last_seen)}` : 'ホストの状態をリアルタイムで確認できます。'}</Text>
+          <Box><Text size="xs" c="dimmed" ff="monospace">OVERVIEW / HOSTS</Text>{hostsQuery.isPending && !selectedHost ? <Skeleton height={36} width={220} my={2} /> : <Title order={1}>{selectedHost?.hostname ?? 'ホスト監視'}</Title>}
+            {hostsQuery.isPending && !selectedHost ? <Skeleton height={20} width={280} mt={4} /> : <Text c="dimmed" size="sm">{selectedHost ? `${selectedHost.os || 'OS 不明'} · 最終受信 ${formatSeen(selectedHost.last_seen)}` : 'ホストの状態をリアルタイムで確認できます。'}</Text>}
           </Box>
-          {selectedHost && <Badge variant="light" color={Date.now() - new Date(selectedHost.last_seen).getTime() < 120_000 ? 'teal' : 'gray'}>
+          {hostsQuery.isPending && !selectedHost ? <Skeleton height={22} width={72} /> : selectedHost && <Badge variant="light" color={Date.now() - new Date(selectedHost.last_seen).getTime() < 120_000 ? 'teal' : 'gray'}>
             {Date.now() - new Date(selectedHost.last_seen).getTime() < 120_000 ? '最近受信' : '受信停止'}
           </Badge>}
         </Group>
 
-        {state === 'loading' && <Alert color="teal" title="読み込み中" icon={<Text c="teal">◌</Text>}>メトリクスを読み込んでいます…</Alert>}
+        {state === 'loading' && <MetricsLoading />}
         {state === 'error' && <Alert color="red" title="データを取得できませんでした">
           <Text size="sm">{errorMessage}</Text>
           {errorMessage === ACCESS_LOGIN_REQUIRED_MESSAGE && <Button component="a" href={accessLoginUrl()} variant="subtle" size="xs" mt="xs">Cloudflare Access にログイン</Button>}
