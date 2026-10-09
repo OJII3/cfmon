@@ -55,18 +55,18 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
   </Group>;
 }
 
-function MetricGauge({ label, value, ratio, color }: { label: string; value: string; ratio: number; color: string }) {
+function MetricGauge({ label, value, ratio, color }: { label: string; value: string; ratio?: number; color?: string }) {
   const circumference = 2 * Math.PI * 44;
-  const progress = Math.max(0, Math.min(1, ratio));
+  const progress = ratio === undefined ? undefined : Math.max(0, Math.min(1, ratio));
 
   return <Box role="group" aria-label={`${label} ${value}`} style={{ width: '100%', maxWidth: 136, aspectRatio: '1', position: 'relative', marginInline: 'auto' }}>
     <svg viewBox="0 0 100 100" aria-hidden="true" style={{ display: 'block', width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
       <circle cx="50" cy="50" r="44" fill="none" stroke="var(--mantine-color-default-border)" strokeWidth="7" />
-      <circle cx="50" cy="50" r="44" fill="none" stroke={`var(--mantine-color-${color}-6)`} strokeWidth="7" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - progress)} />
+      {progress !== undefined && color && <circle cx="50" cy="50" r="44" fill="none" stroke={`var(--mantine-color-${color}-6)`} strokeWidth="7" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - progress)} />}
     </svg>
     <Stack gap={0} align="center" justify="center" style={{ position: 'absolute', inset: 0 }}>
       <Text size="xs" c="dimmed">{label}</Text>
-      <Text fw={600} ff="monospace" style={{ fontSize: 'clamp(0.9rem, 3vw, 1.25rem)', lineHeight: 1.3 }}>{value}</Text>
+      <Text fw={600} ff="monospace" style={{ fontSize: value.length > 6 ? 'clamp(0.65rem, 2.2vw, 0.875rem)' : 'clamp(0.9rem, 3vw, 1.25rem)', lineHeight: 1.3 }}>{value}</Text>
     </Stack>
   </Box>;
 }
@@ -130,6 +130,8 @@ function App() {
     { label: 'CPU', value: formatPercent(current.cpu), ratio: current.cpu, color: 'teal' },
     { label: 'メモリ', value: formatPercent(current.memory), ratio: current.memory, color: 'blue' },
     { label: 'ディスク', value: formatPercent(current.disk), ratio: current.disk, color: 'orange' },
+    { label: 'Load 1m', value: current.load1.toFixed(2) },
+    { label: '稼働時間', value: formatUptime(current.uptime) },
   ] : [];
   const pendingAgents = agents.filter((agent) => agent.status === 'pending');
   const approvedAgents = agents.filter((agent) => agent.status === 'approved');
@@ -237,13 +239,9 @@ function App() {
         {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
         {state === 'ready' && current && <section>
           <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
-          <SimpleGrid cols={3} spacing="xs" mt="md" mb="sm" aria-label="最新メトリクス">
+          <SimpleGrid cols={3} spacing="xs" mt="md" mb="xl" aria-label="最新メトリクス">
             {gauges.map((gauge) => <MetricGauge key={gauge.label} {...gauge} />)}
           </SimpleGrid>
-          <Group gap="lg" justify="center" mb="xl">
-            <Text size="sm" c="dimmed">Load 1m <Text component="span" c="inherit" fw={600} ff="monospace">{current.load1.toFixed(2)}</Text></Text>
-            <Text size="sm" c="dimmed">稼働時間 <Text component="span" c="inherit" fw={600}>{formatUptime(current.uptime)}</Text></Text>
-          </Group>
           <Group justify="space-between" align="end" wrap="wrap">
             <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" />
             <SegmentedControl
