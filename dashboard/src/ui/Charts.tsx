@@ -1,5 +1,5 @@
 import type { Metric } from './api';
-import { Box, Center, Grid, Group, Paper, Text, ThemeIcon } from '@mantine/core';
+import { Center, Grid, Group, Paper, Text, ThemeIcon } from '@mantine/core';
 import { memo } from 'react';
 
 type Props = { metrics: Metric[] };
@@ -23,7 +23,7 @@ function LineChart({ metrics, field, color, label, unit = '%' }: Props & {
   }).join(' ');
   const latest = values.at(-1);
   return <Grid.Col span={{ base: 12, md: 6 }}><Paper withBorder p="md">
-    <Group justify="space-between" align="start"><Box><Text size="xs" c="dimmed" ff="monospace">直近 1 時間</Text><Text fw={600} size="sm" mt={4}>{label}</Text></Box>
+    <Group justify="space-between" align="start"><Text fw={600} size="sm">{label}</Text>
       <Text fw={600} ff="monospace">{latest === undefined ? '—' : `${latest.toFixed(1)}${unit}`}</Text></Group>
     {values.length ? <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={`${label}の推移`} style={{ display: 'block', width: '100%', height: 140, overflow: 'visible', marginTop: 10 }}>
       {[25, 50, 75].map((y) => <line key={y} x1="0" x2="100" y1={y} y2={y} stroke="var(--mantine-color-default-border)" strokeWidth=".7" vectorEffect="non-scaling-stroke" />)}
@@ -46,7 +46,7 @@ function NetworkChart({ metrics }: Props) {
   const latest = metrics.at(-1);
   const format = (value = 0) => value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)} MB/s` : value >= 1_000 ? `${(value / 1_000).toFixed(1)} KB/s` : `${Math.round(value)} B/s`;
   return <Grid.Col span={12}><Paper withBorder p="md">
-    <Group justify="space-between" align="start"><Box><Text size="xs" c="dimmed" ff="monospace">直近 1 時間</Text><Text fw={600} size="sm" mt={4}>ネットワーク</Text></Box>
+    <Group justify="space-between" align="start"><Text fw={600} size="sm">ネットワーク</Text>
       <Group gap="sm" wrap="wrap"><Text component="span" c="dimmed" ff="monospace"><ThemeIcon component="span" size={8} radius="xl" color="teal" mr={6} />受信 {format(latest?.rx_bps)}</Text><Text component="span" c="dimmed" ff="monospace"><ThemeIcon component="span" size={8} radius="xl" color="blue" mr={6} />送信 {format(latest?.tx_bps)}</Text></Group></Group>
     {metrics.length ? <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="ネットワーク通信量の推移" style={{ display: 'block', width: '100%', height: 155, overflow: 'visible', marginTop: 10 }}>
       {[25, 50, 75].map((y) => <line key={y} x1="0" x2="100" y1={y} y2={y} stroke="var(--mantine-color-default-border)" strokeWidth=".7" vectorEffect="non-scaling-stroke" />)}

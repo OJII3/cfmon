@@ -179,7 +179,10 @@ function App() {
           </Stack>
         </>}
       </AppShell.Section>
-      <AppShell.Section pt="md"><Group gap="xs"><ThemeIcon size={8} radius="xl" color="teal" /><Text size="xs" c="dimmed">自動更新 30 秒</Text></Group></AppShell.Section>
+      <AppShell.Section pt="md">
+        <Group gap="xs"><ThemeIcon size={8} radius="xl" color="teal" /><Text size="xs" c="dimmed">自動更新 30 秒</Text></Group>
+        <Anchor href="https://github.com/OJII3/cfmon" target="_blank" rel="noreferrer" size="xs" c="dimmed" mt="sm" display="block">GitHub リポジトリ ↗</Anchor>
+      </AppShell.Section>
     </AppShell.Navbar>
 
     <AppShell.Header px={{ base: 'md', sm: 'xl' }}>
@@ -219,7 +222,7 @@ function App() {
             </Paper>)}
           </SimpleGrid>
           <Group justify="space-between" align="end" wrap="wrap">
-            <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" detail={`1 分間隔 · 過去 ${historyRange} 時間`} />
+            <SectionHeading eyebrow="HISTORY" title="メトリクスの推移" />
             <SegmentedControl
               size="xs"
               value={String(historyRange)}
@@ -289,7 +292,6 @@ function App() {
           </Paper>)}</Stack>}
         </section>
       </Stack>}
-      <Text size="xs" c="dimmed" ff="monospace" ta="center" p="lg">cfmon · ホストの状態をシンプルに可視化</Text>
     </AppShell.Main>
   </AppShell>;
 }
