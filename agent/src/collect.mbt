@@ -12,7 +12,7 @@ fn fields(line : String) -> Array[String] {
 
 ///|
 fn number(s : String) -> Double {
-  @string.parse_double(s) catch {
+  @string.parse_double(s.trim()) catch {
     _ => 0.0
   }
 }
@@ -106,6 +106,23 @@ fn csv_fields(line : String) -> Array[String] {
 }
 
 ///|
+fn gpu_values() -> (Double, Double) {
+  if os_name() != "linux" {
+    return (-1.0, -1.0)
+  }
+  let values = csv_fields(nvidia_metrics())
+  if values.length() != 3 {
+    return (-1.0, -1.0)
+  }
+  let used = number(values[1])
+  let total = number(values[2])
+  if total <= 0.0 {
+    return (-1.0, -1.0)
+  }
+  (clamp(number(values[0]) / 100.0, 0.0, 1.0), clamp(used / total, 0.0, 1.0))
+}
+
+///|
 fn collect_macos(previous_net : (Double, Double), elapsed : Double) -> MetricPayload {
   let values = csv_fields(macos_metrics())
   if values.length() != 7 {
@@ -116,6 +133,7 @@ fn collect_macos(previous_net : (Double, Double), elapsed : Double) -> MetricPay
   let safe_elapsed = if elapsed <= 0.0 { 1.0 } else { elapsed }
   let rx = number(values[4])
   let tx = number(values[5])
+  let (gpu_utilization, gpu_memory) = gpu_values()
   MetricPayload::{
     host: {
       let h = env("CFMON_HOST")
@@ -129,6 +147,8 @@ fn collect_macos(previous_net : (Double, Double), elapsed : Double) -> MetricPay
     rx_bps: nonnegative((rx - old_rx) / safe_elapsed),
     tx_bps: nonnegative((tx - old_tx) / safe_elapsed),
     uptime: nonnegative(number(values[6])),
+    gpu_utilization,
+    gpu_memory,
   }
 }
 
@@ -167,6 +187,7 @@ fn collect(
     process_exit(2)
   }
   let (rx, tx) = network_counters(dev)
+  let (gpu_utilization, gpu_memory) = gpu_values()
   let (old_rx, old_tx) = previous_net
   let safe_elapsed = if elapsed <= 0.0 { 1.0 } else { elapsed }
   MetricPayload::{
@@ -186,6 +207,8 @@ fn collect(
     rx_bps: nonnegative((rx - old_rx) / safe_elapsed),
     tx_bps: nonnegative((tx - old_tx) / safe_elapsed),
     uptime: number(up[0]),
+    gpu_utilization,
+    gpu_memory,
   }
 }
 

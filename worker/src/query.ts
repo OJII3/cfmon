@@ -24,7 +24,7 @@ export async function handleQuery(
 
   const query = kind === "hosts"
     ? `SELECT index1 AS id, argMax(blob1, timestamp) AS hostname, argMax(blob2, timestamp) AS os, argMax(timestamp, timestamp) AS last_seen FROM events.analyticsEngine.cfmon_metrics WHERE timestamp >= NOW() - INTERVAL '1' DAY GROUP BY index1 ORDER BY last_seen DESC LIMIT 1000`
-    : `SELECT toStartOfInterval(timestamp, INTERVAL '1' MINUTE) AS bucket, SUM("sampleInterval" * double1) / SUM("sampleInterval") AS cpu, SUM("sampleInterval" * double2) / SUM("sampleInterval") AS memory, SUM("sampleInterval" * double3) / SUM("sampleInterval") AS load1, SUM("sampleInterval" * double4) / SUM("sampleInterval") AS disk, SUM("sampleInterval" * double5) / SUM("sampleInterval") AS rx_bps, SUM("sampleInterval" * double6) / SUM("sampleInterval") AS tx_bps, SUM("sampleInterval" * double7) / SUM("sampleInterval") AS uptime FROM events.analyticsEngine.cfmon_metrics WHERE index1 = $host AND timestamp >= NOW() - INTERVAL '${rangeHours}' HOUR GROUP BY bucket ORDER BY bucket DESC LIMIT ${rangeHours * 60}`;
+    : `SELECT toStartOfInterval(timestamp, INTERVAL '1' MINUTE) AS bucket, SUM("sampleInterval" * double1) / SUM("sampleInterval") AS cpu, SUM("sampleInterval" * double2) / SUM("sampleInterval") AS memory, SUM("sampleInterval" * double3) / SUM("sampleInterval") AS load1, SUM("sampleInterval" * double4) / SUM("sampleInterval") AS disk, SUM("sampleInterval" * double5) / SUM("sampleInterval") AS rx_bps, SUM("sampleInterval" * double6) / SUM("sampleInterval") AS tx_bps, SUM("sampleInterval" * double7) / SUM("sampleInterval") AS uptime, SUM("sampleInterval" * double8) / SUM("sampleInterval") AS gpu_utilization, SUM("sampleInterval" * double9) / SUM("sampleInterval") AS gpu_memory FROM events.analyticsEngine.cfmon_metrics WHERE index1 = $host AND timestamp >= NOW() - INTERVAL '${rangeHours}' HOUR GROUP BY bucket ORDER BY bucket DESC LIMIT ${rangeHours * 60}`;
 
   let rows: Record<string, unknown>[];
   try {
@@ -50,6 +50,8 @@ export async function handleQuery(
     timestamp: timestamp(row.bucket),
     cpu: Number(row.cpu), memory: Number(row.memory), load1: Number(row.load1),
     disk: Number(row.disk), rx_bps: Number(row.rx_bps), tx_bps: Number(row.tx_bps), uptime: Number(row.uptime),
+    gpu_utilization: Number(row.gpu_utilization) < 0 ? null : Number(row.gpu_utilization),
+    gpu_memory: Number(row.gpu_memory) < 0 ? null : Number(row.gpu_memory),
   })).filter((row) => row.timestamp).reverse();
   return json({ host: id, metrics });
 }

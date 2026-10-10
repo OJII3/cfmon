@@ -141,13 +141,18 @@ export async function handleIngest(request: Request, env: Env, json: JsonRespons
   if (!requiredNumbers.every((key) => typeof body[key] === "number" && Number.isFinite(body[key]) && (key === "cpu" || key === "memory" || key === "disk" ? Number(body[key]) >= 0 && Number(body[key]) <= 1 : Number(body[key]) >= 0))) {
     return json({ error: "invalid_payload" }, 400);
   }
+  const gpuNumbers = ["gpu_utilization", "gpu_memory"] as const;
+  if (!gpuNumbers.every((key) => body[key] === undefined || (typeof body[key] === "number" && Number.isFinite(body[key]) && (Number(body[key]) === -1 || (Number(body[key]) >= 0 && Number(body[key]) <= 1))))) {
+    return json({ error: "invalid_payload" }, 400);
+  }
   const nonce = request.headers.get("X-Cfmon-Nonce")!;
   const nonceResult = await consumeNonce(env, signed, nonce);
   if (nonceResult === "replay") return json({ error: "replay" }, 401);
   if (nonceResult === "unavailable") return json({ error: "service_unavailable" }, 503);
   const [cpu, memory, load1, disk, rx, tx, uptime] = requiredNumbers.map((key) => Number(body[key]));
+  const [gpuUtilization, gpuMemory] = gpuNumbers.map((key) => body[key] === undefined ? -1 : Number(body[key]));
   try {
-    env.METRICS.writeDataPoint({ indexes: [body.host], blobs: [body.host, typeof body.os === "string" ? body.os : ""], doubles: [cpu, memory, load1, disk, rx, tx, uptime] });
+    env.METRICS.writeDataPoint({ indexes: [body.host], blobs: [body.host, typeof body.os === "string" ? body.os : ""], doubles: [cpu, memory, load1, disk, rx, tx, uptime, gpuUtilization, gpuMemory] });
   } catch { return json({ error: "upstream_unavailable" }, 502); }
   await env.REGISTRY.prepare("UPDATE agents SET last_requested_at = ? WHERE public_key = ?").bind(Math.floor(Date.now() / 1000), signed.publicKey).run();
   return json({ ok: true }, 202);

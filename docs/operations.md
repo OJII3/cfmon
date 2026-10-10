@@ -39,11 +39,12 @@ Agent の設定は環境変数で変更できます。
 
 ## 収集メトリクス
 
-CPU、メモリ、ロード、ルートディスク、ネットワーク RX/TX、uptime を収集します。温度、サービス状態、アラート、R2 保存は含みません。
+CPU、メモリ、ロード、ルートディスク、ネットワーク RX/TX、uptime を収集します。Linux では `nvidia-smi` が利用できる場合、先頭の NVIDIA GPU の使用率と VRAM 使用率も収集します。GPU がない場合、GPU 指標は表示されません。温度、サービス状態、アラート、R2 保存は含みません。
 
 - Linux の CPU は `/proc/stat` の差分、メモリは `MemAvailable` を使います。
 - macOS の CPU・メモリは Mach の統計、ロードは `getloadavg` を使います。
 - 両 OS ともディスクは `/` の statvfs、ネットワークは loopback を除くインターフェースのカウンタ差分です。
+- GPU 指標は NVIDIA の `nvidia-smi` に依存します。GPU 使用率と VRAM 使用率を 0〜1 で記録します。AMD GPU と macOS の GPU は対象外です。
 - ネットワークの単位は bytes/second です。仮想インターフェースも含むため、ブリッジやコンテナ環境では同じ通信が複数回数えられる場合があります。
 
 CPU・メモリ・ディスクは0〜1、その他は非負の数値です。ホスト一覧は過去24時間、グラフは過去1時間の1分集計です。サンプリングを考慮した加重平均を表示します。時刻は Worker の受信時刻で、Analytics Engine への反映には遅延があります。
@@ -51,7 +52,7 @@ CPU・メモリ・ディスクは0〜1、その他は非負の数値です。ホ
 送信する JSON の例:
 
 ```json
-{"host":"bronya","os":"linux","cpu":0.32,"memory":0.71,"load1":1.42,"disk":0.51,"rx_bps":120340,"tx_bps":58321,"uptime":93211}
+{"host":"bronya","os":"linux","cpu":0.32,"memory":0.71,"load1":1.42,"disk":0.51,"rx_bps":120340,"tx_bps":58321,"uptime":93211,"gpu_utilization":0.68,"gpu_memory":0.42}
 ```
 
-Analytics Engine では `index1=host`、`blob1=host`、`blob2=os`、`double1..7=cpu,memory,load1,disk,rx_bps,tx_bps,uptime` として保存します。
+GPU が利用できない Agent は `gpu_utilization` と `gpu_memory` に `-1` を送ります。Analytics Engine では `index1=host`、`blob1=host`、`blob2=os`、`double1..7=cpu,memory,load1,disk,rx_bps,tx_bps,uptime`、`double8..9=gpu_utilization,gpu_memory` として保存します。
