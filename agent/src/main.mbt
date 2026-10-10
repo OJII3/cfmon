@@ -16,6 +16,9 @@ extern "C" fn os_name() -> String = "cfmon_os_name"
 extern "C" fn macos_metrics() -> String = "cfmon_macos_metrics"
 
 ///|
+extern "C" fn nvidia_metrics() -> String = "cfmon_nvidia_metrics"
+
+///|
 extern "C" fn monotonic() -> Double = "cfmon_monotonic"
 
 ///|

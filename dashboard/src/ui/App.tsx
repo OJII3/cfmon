@@ -155,6 +155,8 @@ function App() {
     { label: 'ディスク', value: formatPercent(current.disk), ratio: current.disk, color: 'orange' },
     { label: 'Load 1m', value: current.load1.toFixed(2) },
     { label: '稼働時間', value: formatUptime(current.uptime) },
+    ...(current.gpu_utilization === null ? [] : [{ label: 'GPU', value: formatPercent(current.gpu_utilization), ratio: current.gpu_utilization, color: 'grape' }]),
+    ...(current.gpu_memory === null ? [] : [{ label: 'GPU メモリ', value: formatPercent(current.gpu_memory), ratio: current.gpu_memory, color: 'violet' }]),
   ] : [];
   const pendingAgents = agents.filter((agent) => agent.status === 'pending');
   const approvedAgents = agents.filter((agent) => agent.status === 'approved');

@@ -14,6 +14,9 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef __APPLE__
+#include <sys/wait.h>
+#endif
 #include <moonbit.h>
 #ifdef __APPLE__
 #include <ifaddrs.h>
@@ -156,6 +159,23 @@ moonbit_string_t cfmon_macos_metrics(void) {
 #else
 moonbit_string_t cfmon_macos_metrics(void) { return from_ascii(""); }
 #endif
+
+moonbit_string_t cfmon_nvidia_metrics(void) {
+#ifdef __APPLE__
+  return from_ascii("");
+#else
+  FILE *pipe = popen("nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null", "r");
+  if (!pipe) return from_ascii("");
+  char result[256] = "";
+  if (fgets(result, sizeof(result), pipe)) {
+    char *newline = strchr(result, '\n');
+    if (newline) *newline = '\0';
+  }
+  int status = pclose(pipe);
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return from_ascii("");
+  return from_ascii(result);
+#endif
+}
 
 double cfmon_monotonic(void) {
   struct timespec ts;

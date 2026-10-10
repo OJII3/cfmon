@@ -16,6 +16,8 @@ export type Metric = {
   rx_bps: number;
   tx_bps: number;
   uptime: number;
+  gpu_utilization: number | null;
+  gpu_memory: number | null;
 };
 export type HostMetrics = { host: string; metrics: Metric[] };
 export type HistoryRange = 1 | 6 | 24;
