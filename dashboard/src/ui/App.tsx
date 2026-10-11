@@ -75,7 +75,7 @@ function MetricGauge({ label, value, ratio, color }: { label: string; value: str
 function MetricsLoading() {
   return <section aria-label="メトリクスを読み込み中" aria-busy="true">
     <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
-    <SimpleGrid cols={3} spacing="xs" mt="md" mb="xl" aria-label="最新メトリクス">
+    <SimpleGrid cols={{ base: 3, lg: 6 }} spacing="xs" mt="md" mb="xl" aria-label="最新メトリクス">
       {['CPU', 'メモリ', 'ディスク', 'Load 1m', '稼働時間'].map((label) => <Box key={label} style={{ width: '100%', maxWidth: 136, aspectRatio: '1', marginInline: 'auto', display: 'grid', placeItems: 'center' }}>
         <Skeleton circle width="100%" height="100%" />
       </Box>)}
@@ -264,7 +264,7 @@ function App() {
         {state === 'ready' && hosts.length > 0 && !current && <Alert color="gray">このホストのメトリクスはまだありません。</Alert>}
         {state === 'ready' && current && <section>
           <SectionHeading eyebrow="LATEST METRICS" title="最新の状態" detail="1 分平均" />
-          <SimpleGrid cols={3} spacing="xs" mt="md" mb="xl" aria-label="最新メトリクス">
+          <SimpleGrid cols={{ base: 3, lg: 6 }} spacing="xs" mt="md" mb="xl" aria-label="最新メトリクス">
             {gauges.map((gauge) => <MetricGauge key={gauge.label} {...gauge} />)}
           </SimpleGrid>
           <Group justify="space-between" align="end" wrap="wrap">
