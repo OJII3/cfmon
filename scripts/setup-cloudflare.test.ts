@@ -217,7 +217,7 @@ test('repairs the app-owned policy while preserving unrelated restrictive polici
     { name: 'department-policy', decision: 'allow', include: [{ email: { email: 'other@example.test' } }] },
     { id: 'owner-policy-id', account_id: 'account-id', precedence: 1 },
   ]);
-  assert.equal(body.policies.some((policy) => policy.include.some((rule) => 'everyone' in rule)), false);
+  assert.equal(body.policies.some((policy) => (policy.include ?? []).some((rule) => 'everyone' in rule)), false);
 });
 
 test('does not modify another app or an unrelated broad allow policy', async () => {
