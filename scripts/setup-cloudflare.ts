@@ -149,7 +149,32 @@ function managedPolicy(email) {
   };
 }
 
-function appBody(app, { hostname, email, accountId, idpId, idpIds, accessPolicy }) {
+function isManagedPolicy(policy, email) {
+  return policy.decision === 'allow' &&
+    Array.isArray(policy.include) && policy.include.length === 1 &&
+    policy.include[0]?.email?.email === email &&
+    (!Array.isArray(policy.exclude) || policy.exclude.length === 0) &&
+    (!Array.isArray(policy.require) || policy.require.length === 0);
+}
+
+function ensureManagedPolicy({ accountId, email, runCf }) {
+  const policies = listOf(command(runCf, ['zero-trust', 'access', 'policies', 'list', '--per-page', '100'], accountId));
+  const matches = policies.filter((policy) => policy.name === 'cfmon-owner');
+  if (matches.length > 1) {
+    throw new Error('複数のcfmon-owner reusable Access policyがあります。Cloudflare Zero Trustで整理してください。');
+  }
+  if (matches.length === 1) {
+    if (typeof matches[0].id === 'string' && matches[0].id && isManagedPolicy(matches[0], email)) return matches[0];
+    throw new Error('既存のcfmon-owner reusable Access policyを安全に再利用できません。Cloudflare Zero Trustで確認してください。');
+  }
+  const policy = resultOf(command(runCf, [
+    'zero-trust', 'access', 'policies', 'create', '--body', JSON.stringify(managedPolicy(email)),
+  ], accountId));
+  if (typeof policy?.id !== 'string' || !policy.id) throw new Error('reusable Access policyを作成できませんでした。');
+  return policy;
+}
+
+function appBody(app, { hostname, accountId, idpIds, accessPolicy, managedDefault = false }) {
   const body = app ? { ...app } : {};
   const destinations = Array.isArray(body.destinations) ? [...body.destinations] : [];
   const targetIndex = destinations.findIndex((destination) => destination.type === 'public' && destination.uri === hostname);
@@ -167,19 +192,16 @@ function appBody(app, { hostname, email, accountId, idpId, idpIds, accessPolicy 
   const currentPolicies = Array.isArray(body.policies) ? body.policies : [];
   const reusablePolicies = currentPolicies.filter((policy) => typeof policy === 'string' || policy.account_id);
   const inlinePolicies = currentPolicies.filter((policy) => typeof policy === 'object' && !policy.account_id);
-  let policies;
-  if (accessPolicy) {
-    const unrelatedInline = inlinePolicies.filter((policy) => policy.name !== 'cfmon-owner');
-    if (unrelatedInline.length > 0) {
-      throw new Error('既存の個別Access policyを保持できないため、既存のpolicy構成を確認してください。');
-    }
-    policies = [{ id: accessPolicy.id, account_id: accountId, precedence: 1 }];
-  } else {
-    if (reusablePolicies.length > 0) {
-      throw new Error('既存のreusable Access policyがあります。セットアップ時に使用するpolicyを選択してください。');
-    }
-    policies = inlinePolicies.filter((policy) => policy.name !== 'cfmon-owner');
+  if (!accessPolicy?.id) throw new Error('reusable Access policy を取得できませんでした。');
+  if (managedDefault && reusablePolicies.some((policy) =>
+    (typeof policy === 'string' ? policy : policy.id) !== accessPolicy.id,
+  )) {
+    throw new Error('既存のreusable Access policyがあります。セットアップ時に使用するpolicyを選択してください。');
   }
+  const policies = [
+    ...inlinePolicies.filter((policy) => policy.name !== 'cfmon-owner'),
+    { id: accessPolicy.id, account_id: accountId, precedence: 1 },
+  ];
   const existingBroadAllow = policies.some((policy) => policy.decision === 'allow' && (policy.include ?? []).some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule));
   if (existingBroadAllow) {
     throw new Error('既存のcfmon Access appに全ユーザー許可policyがあります。既存policyを確認してから再実行してください。');
@@ -192,8 +214,8 @@ function appBody(app, { hostname, email, accountId, idpId, idpIds, accessPolicy 
     type: 'self_hosted',
     domain: hostname,
     destinations,
-    allowed_idps: accessPolicy ? idpIds : [idpId],
-    policies: accessPolicy ? policies : [...policies, managedPolicy(email)],
+    allowed_idps: idpIds,
+    policies,
     session_duration: '24h',
   };
 }
@@ -245,6 +267,7 @@ export async function selectReusablePolicy({ accountId, runCf = defaultRunCf, se
   const policies = listOf(command(runCf, ['zero-trust', 'access', 'policies', 'list', '--per-page', '100'], accountId));
   const safePolicies = policies.filter((policy) =>
     typeof policy.id === 'string' && policy.id && typeof policy.name === 'string' &&
+    policy.name !== 'cfmon-owner' &&
     policy.decision === 'allow' &&
     Array.isArray(policy.include) && policy.include.length > 0 &&
     !policy.include.some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule || 'login_method' in rule),
@@ -297,12 +320,16 @@ export async function configureAccess({ accountId, email, hostname, accessPolicy
   if (app && app.name !== 'cfmon') {
     throw new Error('同じhostnameにcfmon以外のAccess appがあります。既存policyを保持するため自動変更しません。');
   }
+  let detail = null;
+  if (app) detail = resultOf(call(['zero-trust', 'access', 'applications', 'get', app.id]));
+  const managedDefault = !accessPolicy;
+  if (managedDefault) accessPolicy = ensureManagedPolicy({ accountId, email, runCf });
+
   let response;
   if (!app) {
-    response = resultOf(call(['zero-trust', 'access', 'applications', 'create', '--body', JSON.stringify(appBody(null, { hostname, email, accountId, idpId: idp.id, idpIds, accessPolicy }))]));
+    response = resultOf(call(['zero-trust', 'access', 'applications', 'create', '--body', JSON.stringify(appBody(null, { hostname, accountId, idpIds, accessPolicy, managedDefault }))]));
   } else {
-    const detail = resultOf(call(['zero-trust', 'access', 'applications', 'get', app.id]));
-    const body = appBody(detail, { hostname, email, accountId, idpId: idp.id, idpIds, accessPolicy });
+    const body = appBody(detail, { hostname, accountId, idpIds, accessPolicy, managedDefault });
     response = resultOf(call(['zero-trust', 'access', 'applications', 'update', app.id, '--body', JSON.stringify(body)]));
   }
   const aud = response?.aud ?? response?.aud_tag ?? app?.aud;

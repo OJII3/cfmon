@@ -18,7 +18,7 @@ nix run github:OJII3/cfmon -- setup
 
 スクリプトはログイン中のメールアドレス、アカウント ID、Access チームドメイン、AUD を自動取得します。active zone がある場合、複数なら一覧から選び、ひとつなら自動選択します。続けてサブドメインを入力し、`<入力値>.<zone>` を Worker の Custom Domain に割り当てます。空欄なら `cfmon` を使います。DNS レコードと証明書は Cloudflare が作成し、`workers.dev` は無効にします。active zone がない場合は `workers.dev` を使います。
 
-セットアップは D1 データベースの作成・マイグレーション、Dashboard のビルド、Worker のデプロイ、Access アプリの設定を行います。既存の reusable Allow policy がある場合は選択できます。全員許可・One-time PIN のみ・Service Token 全許可の policy は候補から除外されます。既存 policy を選ばない場合は、ログイン中のメールアドレスだけを許可します。Agent 用の `/api/v1/pair` と `/api/v1/ingest` だけを Access の対象外にします。
+セットアップは D1 データベースの作成・マイグレーション、Dashboard のビルド、Worker のデプロイ、Access アプリの設定を行います。既存の reusable Allow policy がある場合は選択できます。全員許可・One-time PIN のみ・Service Token 全許可の policy は候補から除外されます。既存 policy を選ばない場合は、ログイン中のメールアドレスだけを許可する reusable policy (`cfmon-owner`) を作成または再利用し、Access アプリに紐づけます。Agent 用の `/api/v1/pair` と `/api/v1/ingest` だけを Access の対象外にします。
 
 公開設定やシークレットの手入力は不要です。Nix CLI の設定は `$XDG_CONFIG_HOME/cfmon/`（未設定なら `$HOME/.config/cfmon/`）に保存され、シェルを閉じても更新に使えます。OAuth 認証情報は `cf` が管理します。実アカウントでのセットアップには Analytics Engine の有効化と Cloudflare 側の利用権限が必要です。
 
