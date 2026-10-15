@@ -186,7 +186,7 @@ test('attaches the selected reusable policy to the custom-domain app', async () 
   assert.deepEqual(body.allowed_idps, ['google-idp', 'otp-id']);
 });
 
-test('repairs the app-owned policy while preserving unrelated restrictive policies', async () => {
+test('replaces existing app-specific policies with the managed reusable policy', async () => {
   const hostname = 'cfmon.worker-example.workers.dev';
   const calls = [];
   const runCf = (args, options) => {
@@ -202,7 +202,7 @@ test('repairs the app-owned policy while preserving unrelated restrictive polici
     if (key.startsWith('zero-trust access applications get')) return json({ result: {
       id: 'app-id', name: 'cfmon', type: 'self_hosted', domain: hostname, aud: 'existing-aud',
       policies: [
-        { name: 'cfmon-owner', decision: 'allow', include: [{ everyone: {} }] },
+        { name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }] },
         { name: 'department-policy', decision: 'allow', include: [{ email: { email: 'other@example.test' } }] },
       ],
     } });
@@ -213,11 +213,7 @@ test('repairs the app-owned policy while preserving unrelated restrictive polici
   assert.deepEqual(result, { teamDomain: 'existing.cloudflareaccess.com', aud: 'existing-aud' });
   const update = calls.find(({ args }) => args[3] === 'update');
   const body = JSON.parse(update.args.at(-1));
-  assert.deepEqual(body.policies, [
-    { name: 'department-policy', decision: 'allow', include: [{ email: { email: 'other@example.test' } }] },
-    { id: 'owner-policy-id', account_id: 'account-id', precedence: 1 },
-  ]);
-  assert.equal(body.policies.some((policy) => (policy.include ?? []).some((rule) => 'everyone' in rule)), false);
+  assert.deepEqual(body.policies, [{ id: 'owner-policy-id', account_id: 'account-id', precedence: 1 }]);
 });
 
 test('does not modify another app or an unrelated broad allow policy', async () => {
