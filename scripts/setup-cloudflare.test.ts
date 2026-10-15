@@ -137,6 +137,10 @@ test('creates the Access organization, email identity provider, and protected ap
     if (key.startsWith('zero-trust organization create')) return json({ result: { auth_domain: 'cfmon-team.cloudflareaccess.com' } });
     if (key.startsWith('zero-trust identity-providers list')) return json({ result: [] });
     if (key.startsWith('zero-trust identity-providers create')) return json({ result: { id: 'otp-id', type: 'onetimepin' } });
+    if (key.startsWith('zero-trust access policies list')) return json({ result: [] });
+    if (key.startsWith('zero-trust access policies create')) return json({ result: {
+      id: 'owner-policy-id', name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }],
+    } });
     if (key.startsWith('zero-trust access applications list')) return json({ result: [] });
     if (key.startsWith('zero-trust access applications create')) return json({ result: { id: 'app-id', aud: 'app-audience' } });
     throw new Error(`Unexpected mocked command: ${args.join(' ')}`);
@@ -149,7 +153,11 @@ test('creates the Access organization, email identity provider, and protected ap
     { behavior: 'public', path_pattern: '/api/v1/pair' },
     { behavior: 'public', path_pattern: '/api/v1/ingest' },
   ]);
-  assert.deepEqual(body.policies[0].include, [{ email: { email: 'owner@example.test' } }]);
+  assert.deepEqual(body.policies, [{ id: 'owner-policy-id', account_id: accountId, precedence: 1 }]);
+  const createPolicy = calls.find(({ args }) => args.slice(0, 5).join(' ') === 'zero-trust access policies create --body');
+  assert.deepEqual(JSON.parse(createPolicy.args[5]), {
+    name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }], exclude: [], require: [],
+  });
   assert.equal(calls.every(({ options }) => options.env.CLOUDFLARE_ACCOUNT_ID === accountId), true);
   assert.equal(calls.every(({ options }) => options.env.CLOUDFLARE_API_TOKEN === undefined), true);
   assert.equal(calls.some(({ args }) => args.includes('--dry-run')), false);
@@ -178,7 +186,7 @@ test('attaches the selected reusable policy to the custom-domain app', async () 
   assert.deepEqual(body.allowed_idps, ['google-idp', 'otp-id']);
 });
 
-test('repairs the app-owned policy while preserving unrelated restrictive policies', async () => {
+test('replaces existing app-specific policies with the managed reusable policy', async () => {
   const hostname = 'cfmon.worker-example.workers.dev';
   const calls = [];
   const runCf = (args, options) => {
@@ -186,11 +194,15 @@ test('repairs the app-owned policy while preserving unrelated restrictive polici
     const key = args.slice(0, 4).join(' ');
     if (key.startsWith('zero-trust organization get')) return json({ result: { auth_domain: 'existing.cloudflareaccess.com' } });
     if (key.startsWith('zero-trust identity-providers list')) return json({ result: [{ id: 'otp-id', type: 'onetimepin' }] });
+    if (key.startsWith('zero-trust access policies list')) return json({ result: [] });
+    if (key.startsWith('zero-trust access policies create')) return json({ result: {
+      id: 'owner-policy-id', name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }],
+    } });
     if (key.startsWith('zero-trust access applications list')) return json({ result: [{ id: 'app-id', name: 'cfmon', domain: hostname, aud: 'existing-aud' }] });
     if (key.startsWith('zero-trust access applications get')) return json({ result: {
       id: 'app-id', name: 'cfmon', type: 'self_hosted', domain: hostname, aud: 'existing-aud',
       policies: [
-        { name: 'cfmon-owner', decision: 'allow', include: [{ everyone: {} }] },
+        { name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }] },
         { name: 'department-policy', decision: 'allow', include: [{ email: { email: 'other@example.test' } }] },
       ],
     } });
@@ -201,11 +213,7 @@ test('repairs the app-owned policy while preserving unrelated restrictive polici
   assert.deepEqual(result, { teamDomain: 'existing.cloudflareaccess.com', aud: 'existing-aud' });
   const update = calls.find(({ args }) => args[3] === 'update');
   const body = JSON.parse(update.args.at(-1));
-  assert.deepEqual(body.policies, [
-        { name: 'department-policy', decision: 'allow', include: [{ email: { email: 'other@example.test' } }] },
-        { name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }], exclude: [], require: [] },
-  ]);
-  assert.equal(body.policies.some((policy) => policy.include.some((rule) => 'everyone' in rule)), false);
+  assert.deepEqual(body.policies, [{ id: 'owner-policy-id', account_id: 'account-id', precedence: 1 }]);
 });
 
 test('does not modify another app or an unrelated broad allow policy', async () => {
@@ -218,6 +226,10 @@ test('does not modify another app or an unrelated broad allow policy', async () 
       const key = args.slice(0, 4).join(' ');
       if (key.startsWith('zero-trust organization get')) return json({ result: { auth_domain: 'existing.cloudflareaccess.com' } });
       if (key.startsWith('zero-trust identity-providers list')) return json({ result: [{ id: 'otp-id', type: 'onetimepin' }] });
+      if (key.startsWith('zero-trust access policies list')) return json({ result: [] });
+      if (key.startsWith('zero-trust access policies create')) return json({ result: {
+        id: 'owner-policy-id', name: 'cfmon-owner', decision: 'allow', include: [{ email: { email: 'owner@example.test' } }],
+      } });
       if (key.startsWith('zero-trust access applications list')) return json({ result: [app] });
       if (key.startsWith('zero-trust access applications get')) return json({ result: app });
       throw new Error(`Unexpected mocked command: ${args.join(' ')}`);
