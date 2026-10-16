@@ -12,12 +12,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_one_approved_per_host
 
 CREATE INDEX IF NOT EXISTS agents_status_requested
   ON agents(status, last_requested_at);
-
-CREATE TABLE IF NOT EXISTS request_nonces (
-  public_key TEXT NOT NULL,
-  nonce TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  PRIMARY KEY (public_key, nonce)
-);
-
-CREATE INDEX IF NOT EXISTS request_nonces_expiry ON request_nonces(expires_at);

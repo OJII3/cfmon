@@ -4,35 +4,33 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const worker = resolve(root, 'worker');
-const CF_BIN = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const workerDir = resolve(root, 'worker');
 
-function defaultRunCf(args, { env = process.env, interactive = false } = {}) {
-  const result = spawnSync(CF_BIN, ['--no-install', 'cf', ...args], {
-    cwd: worker,
-    encoding: 'utf8',
+function cliEnv(accountId) {
+  const env = { ...process.env };
+  delete env.CLOUDFLARE_API_TOKEN;
+  if (accountId) env.CLOUDFLARE_ACCOUNT_ID = accountId;
+  else delete env.CLOUDFLARE_ACCOUNT_ID;
+  return env;
+}
+
+function defaultRunCf(args, { env = cliEnv(), interactive = false } = {}) {
+  const child = spawnSync('npx', ['--no-install', 'cf', ...args], {
+    cwd: workerDir,
     env,
+    encoding: 'utf8',
     stdio: interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-    maxBuffer: 2 * 1024 * 1024,
+    maxBuffer: 4 * 1024 * 1024,
   });
-  return { status: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  if (child.error) throw child.error;
+  return {
+    status: child.status ?? 1,
+    stdout: child.stdout ?? '',
+    stderr: child.stderr ?? '',
+  };
 }
 
-function parseOutput(result, command) {
-  if (result.status !== 0) {
-    const error = new Error(`cf ${command} に失敗しました。Cloudflare CLI のログイン状態と権限を確認してください。`);
-    error.status = result.status;
-    error.stderr = result.stderr;
-    throw error;
-  }
-  try {
-    return result.stdout.trim() ? JSON.parse(result.stdout) : null;
-  } catch {
-    throw new Error(`cf ${command} がJSONを返しませんでした。Cloudflare CLIを更新して再実行してください。`);
-  }
-}
-
-function resultOf(value) {
+function unwrap(value) {
   let current = value;
   for (let i = 0; i < 3 && current && typeof current === 'object' && 'result' in current; i++) {
     current = current.result;
@@ -40,103 +38,110 @@ function resultOf(value) {
   return current;
 }
 
+function parseJson(text, label) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label} のJSONを読み取れませんでした`);
+  }
+}
+
+function command(runCf, args, accountId) {
+  const result = runCf(args, { env: cliEnv(accountId) });
+  if (result.status !== 0) {
+    const details = (result.stderr || result.stdout || '').trim();
+    throw new Error(`cf ${args.join(' ')} に失敗しました${details ? `: ${details}` : ''}`);
+  }
+  return parseJson(result.stdout, `cf ${args.join(' ')}`);
+}
+
 function listOf(value) {
-  const result = resultOf(value);
-  if (Array.isArray(result)) return result;
-  if (result && typeof result === 'object') {
-    for (const key of ['accounts', 'zones', 'policies', 'identity_providers', 'apps', 'applications', 'items']) {
-      if (Array.isArray(result[key])) return result[key];
-    }
+  const data = unwrap(value);
+  if (Array.isArray(data)) return data;
+  for (const key of ['accounts', 'zones', 'items', 'result']) {
+    if (Array.isArray(data?.[key])) return data[key];
   }
   return [];
 }
 
+function resultOf(value) {
+  const data = unwrap(value);
+  return Array.isArray(data) ? data[0] : data;
+}
+
 function findEmail(value) {
-  const result = resultOf(value);
-  const candidates = [result?.email, result?.user?.email, result?.user?.email_address, result?.account?.email];
-  return candidates.find((email) => typeof email === 'string' && email.includes('@'));
-}
-
-async function chooseAccount(accounts, choose) {
-  if (accounts.length === 0) throw new Error('このCloudflare OAuth userで利用できるaccountがありません。');
-  if (accounts.length === 1) return accounts[0];
-  const selected = await choose(accounts);
-  const account = accounts.find((item) => item.id === selected || item.id === selected?.id);
-  if (!account) throw new Error('Cloudflare account が選択されませんでした。');
-  return account;
-}
-
-async function chooseItem(items, question, label) {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error(`${question}を選択するため、対話端末からセットアップを実行してください。`);
+  if (!value || typeof value !== 'object') return null;
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'email' && typeof item === 'string' && item.includes('@')) return item;
+    const nested = findEmail(item);
+    if (nested) return nested;
   }
-  process.stdout.write(`${question}を選択してください:\n`);
-  items.forEach((item, index) => process.stdout.write(`  ${index + 1}. ${label(item)}\n`));
-  const input = createInterface({ input: process.stdin, output: process.stdout });
+  return null;
+}
+
+function isNotFound(error) {
+  return /404|not found|does not exist|organization.*not/i.test(String(error?.message ?? error));
+}
+
+async function promptChoice(items, heading, formatItem) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(`${heading}の選択には対話端末が必要です。`);
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await input.question('番号: ');
-    const index = Number(answer) - 1;
+    process.stdout.write(`${heading}:\n`);
+    items.forEach((item, index) => {
+      process.stdout.write(`  ${index + 1}) ${formatItem(item)}\n`);
+    });
+    const answer = (await rl.question(`番号を入力してください (1-${items.length}): `)).trim();
+    const index = Number.parseInt(answer, 10) - 1;
     if (!Number.isInteger(index) || index < 0 || index >= items.length) {
-      throw new Error(`${question}の選択番号が正しくありません。`);
+      throw new Error('有効な番号を選択してください。');
     }
     return items[index];
   } finally {
-    input.close();
+    rl.close();
   }
 }
 
 async function terminalAccountChoice(accounts) {
-  return chooseItem(accounts, '使用するCloudflare account', (account) => account.name ?? account.id);
+  return promptChoice(accounts, '使用する Cloudflare アカウントを選択してください', (account) => `${account.name} (${account.id})`);
 }
 
 async function terminalZoneChoice(zones) {
-  return chooseItem(zones, 'Worker に割り当てる zone', (zone) => zone.name);
+  return promptChoice(zones, '公開に使用する Cloudflare ドメインを選択してください', (zone) => zone.name);
 }
 
 async function terminalSubdomainChoice(zone) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return 'cfmon';
-  const input = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    return await input.question(`Worker のサブドメイン [cfmon]（${zone.name} の下）: `);
+    return (await rl.question(`使用するサブドメインを入力してください (.${zone.name}、未入力で cfmon): `)).trim();
   } finally {
-    input.close();
+    rl.close();
   }
 }
 
 async function terminalPolicyChoice(choices) {
-  return chooseItem(choices, 'Dashboard の Access policy', (choice) => choice.label);
+  return promptChoice(choices, 'Access で使用するポリシーを選択してください', (choice) => choice.label);
 }
 
-function cliEnv(accountId) {
-  const env = { ...process.env };
-  // cf must use its OAuth profile. Never pass an ambient API token into setup.
-  delete env.CLOUDFLARE_API_TOKEN;
-  if (accountId) env.CLOUDFLARE_ACCOUNT_ID = accountId;
-  return env;
+async function chooseAccount(accounts, selectAccount) {
+  if (accounts.length === 0) throw new Error('利用可能な Cloudflare アカウントが見つかりませんでした。');
+  if (accounts.length === 1) return accounts[0];
+  const selected = await selectAccount(accounts);
+  const match = accounts.find((account) => account.id === selected?.id || account.id === selected);
+  if (!match) throw new Error('有効な Cloudflare アカウントが選択されませんでした。');
+  return match;
 }
 
-function command(runCf, args, accountId, interactive = false) {
-  const cmd = args.join(' ');
-  const result = runCf(args, { env: cliEnv(accountId), interactive });
-  return parseOutput(result, cmd);
-}
-
-function isNotFound(error) {
-  return error.status === 1 && /\b404\b|not found|does not exist/i.test(error.stderr ?? '');
-}
-
-function normalizedHostname(input) {
-  let url;
-  try { url = new URL(input.includes('://') ? input : `https://${input}`); }
-  catch { throw new Error('Worker のURLをCloudflare Accessに設定できませんでした。'); }
-  if (url.protocol !== 'https:' || url.port || !url.hostname.includes('.') || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('WorkerのHTTPS URLを指定してください。');
-  }
-  return url.hostname;
+function normalizedHostname(hostname) {
+  const url = hostname.includes('://') ? new URL(hostname) : new URL(`https://${hostname}`);
+  return url.host;
 }
 
 function orgDomain(accountId) {
-  return `cfmon-${accountId.replaceAll('-', '').slice(0, 12).toLowerCase()}.cloudflareaccess.com`;
+  return `cfmon-${accountId.slice(0, 12).toLowerCase()}.cloudflareaccess.com`;
 }
 
 function managedPolicy(email) {
@@ -157,8 +162,7 @@ function isManagedPolicy(policy, email) {
     (!Array.isArray(policy.require) || policy.require.length === 0);
 }
 
-function ensureManagedPolicy({ accountId, email, runCf }) {
-  const policies = listOf(command(runCf, ['zero-trust', 'access', 'policies', 'list', '--per-page', '100'], accountId));
+function ensureManagedPolicy({ accountId, email, policies, runCf }) {
   const matches = policies.filter((policy) => policy.name === 'cfmon-owner');
   if (matches.length > 1) {
     throw new Error('複数のcfmon-owner reusable Access policyがあります。Cloudflare Zero Trustで整理してください。');
@@ -174,7 +178,91 @@ function ensureManagedPolicy({ accountId, email, runCf }) {
   return policy;
 }
 
-function appBody(app, { hostname, accountId, idpIds, accessPolicy }) {
+function managedServicePolicy(serviceTokenId) {
+  return {
+    name: 'cfmon-agent',
+    decision: 'non_identity',
+    include: [{ service_token: { token_id: serviceTokenId } }],
+    exclude: [],
+    require: [],
+  };
+}
+
+function isManagedServicePolicy(policy, serviceTokenId) {
+  return policy.decision === 'non_identity' &&
+    Array.isArray(policy.include) && policy.include.length === 1 &&
+    policy.include[0]?.service_token?.token_id === serviceTokenId &&
+    (!Array.isArray(policy.exclude) || policy.exclude.length === 0) &&
+    (!Array.isArray(policy.require) || policy.require.length === 0);
+}
+
+function ensureManagedServiceToken({ accountId, existingClientId, existingClientSecret, runCf }) {
+  const tokens = listOf(command(runCf, ['zero-trust', 'access', 'service-tokens', 'list', '--per-page', '100'], accountId));
+  const matches = tokens.filter((token) => token.name === 'cfmon-agent');
+  if (matches.length > 1) {
+    throw new Error('複数のcfmon-agent Access Service Tokenがあります。Cloudflare Zero Trustで整理してください。');
+  }
+  if (matches.length === 1) {
+    const existing = matches[0];
+    if (typeof existing?.id !== 'string' || !existing.id || typeof existing?.client_id !== 'string' || !existing.client_id) {
+      throw new Error('既存のcfmon-agent Access Service Tokenの情報を取得できませんでした。');
+    }
+    if (
+      typeof existingClientId === 'string' && existingClientId &&
+      typeof existingClientSecret === 'string' && existingClientSecret &&
+      existingClientId !== 'setup-pending' && existingClientSecret !== 'setup-pending' &&
+      existing.client_id === existingClientId
+    ) {
+      return { id: existing.id, clientId: existing.client_id, clientSecret: existingClientSecret };
+    }
+    const rotated = resultOf(command(runCf, ['zero-trust', 'access', 'service-tokens', 'rotate', existing.id], accountId));
+    const clientId = rotated?.client_id ?? existing.client_id;
+    const clientSecret = rotated?.client_secret;
+    if (typeof clientId !== 'string' || !clientId || typeof clientSecret !== 'string' || !clientSecret) {
+      throw new Error('Access Service Token のシークレットを更新できませんでした。');
+    }
+    return { id: existing.id, clientId, clientSecret };
+  }
+  const created = resultOf(command(runCf, [
+    'zero-trust', 'access', 'service-tokens', 'create', '--body', JSON.stringify({ name: 'cfmon-agent', duration: 'forever' }),
+  ], accountId));
+  if (
+    typeof created?.id !== 'string' || !created.id ||
+    typeof created?.client_id !== 'string' || !created.client_id ||
+    typeof created?.client_secret !== 'string' || !created.client_secret
+  ) {
+    throw new Error('Access Service Token を作成できませんでした。');
+  }
+  return { id: created.id, clientId: created.client_id, clientSecret: created.client_secret };
+}
+
+function ensureManagedServicePolicy({ accountId, serviceTokenId, policies, runCf }) {
+  const matches = policies.filter((policy) => policy.name === 'cfmon-agent');
+  if (matches.length > 1) {
+    throw new Error('複数のcfmon-agent reusable Access policyがあります。Cloudflare Zero Trustで整理してください。');
+  }
+  if (matches.length === 1) {
+    const existing = matches[0];
+    if (typeof existing?.id === 'string' && existing.id && isManagedServicePolicy(existing, serviceTokenId)) {
+      return existing;
+    }
+    if (typeof existing?.id === 'string' && existing.id && existing.decision === 'non_identity') {
+      const updated = resultOf(command(runCf, [
+        'zero-trust', 'access', 'policies', 'update', existing.id, '--body', JSON.stringify(managedServicePolicy(serviceTokenId)),
+      ], accountId));
+      if (typeof updated?.id === 'string' && updated.id) return updated;
+      return existing;
+    }
+    throw new Error('既存のcfmon-agent reusable Access policyを安全に再利用できません。Cloudflare Zero Trustで確認してください。');
+  }
+  const policy = resultOf(command(runCf, [
+    'zero-trust', 'access', 'policies', 'create', '--body', JSON.stringify(managedServicePolicy(serviceTokenId)),
+  ], accountId));
+  if (typeof policy?.id !== 'string' || !policy.id) throw new Error('Agent用 reusable Access policy を作成できませんでした。');
+  return policy;
+}
+
+function appBody(app, { hostname, accountId, idpIds, accessPolicy, servicePolicy }) {
   const body = app ? { ...app } : {};
   const destinations = Array.isArray(body.destinations) ? [...body.destinations] : [];
   const targetIndex = destinations.findIndex((destination) => destination.type === 'public' && destination.uri === hostname);
@@ -183,14 +271,13 @@ function appBody(app, { hostname, accountId, idpIds, accessPolicy }) {
     uri: hostname,
     overrides: [
       { behavior: 'public', path_pattern: '/api/v1/pair' },
-      { behavior: 'public', path_pattern: '/api/v1/ingest' },
     ],
   };
   if (targetIndex === -1) destinations.push(target);
   else destinations[targetIndex] = target;
 
   const currentPolicies = Array.isArray(body.policies) ? body.policies : [];
-  if (!accessPolicy?.id) throw new Error('reusable Access policy を取得できませんでした。');
+  if (!accessPolicy?.id || !servicePolicy?.id) throw new Error('reusable Access policy を取得できませんでした。');
   const existingBroadAllow = currentPolicies.some((policy) =>
     typeof policy === 'object' && policy?.decision === 'allow' &&
     (policy.include ?? []).some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule),
@@ -198,7 +285,10 @@ function appBody(app, { hostname, accountId, idpIds, accessPolicy }) {
   if (existingBroadAllow) {
     throw new Error('既存のcfmon Access appに全ユーザー許可policyがあります。既存policyを確認してから再実行してください。');
   }
-  const policies = [{ id: accessPolicy.id, account_id: accountId, precedence: 1 }];
+  const policies = [
+    { id: accessPolicy.id, account_id: accountId, precedence: 1 },
+    { id: servicePolicy.id, account_id: accountId, precedence: 2 },
+  ];
 
   for (const key of ['id', 'aud', 'created_at', 'updated_at', 'uid']) delete body[key];
   return {
@@ -261,9 +351,10 @@ export async function selectReusablePolicy({ accountId, runCf = defaultRunCf, se
   const safePolicies = policies.filter((policy) =>
     typeof policy.id === 'string' && policy.id && typeof policy.name === 'string' &&
     policy.name !== 'cfmon-owner' &&
+    policy.name !== 'cfmon-agent' &&
     policy.decision === 'allow' &&
     Array.isArray(policy.include) && policy.include.length > 0 &&
-    !policy.include.some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule || 'login_method' in rule),
+    !policy.include.some((rule) => 'everyone' in rule || 'any_valid_service_token' in rule || 'service_token' in rule || 'login_method' in rule),
   );
   if (safePolicies.length === 0) return null;
   const choices = [
@@ -276,8 +367,16 @@ export async function selectReusablePolicy({ accountId, runCf = defaultRunCf, se
   return choice.policy ?? null;
 }
 
-/** Create or reuse only cfmon's Access resources. No token or public value is saved. */
-export async function configureAccess({ accountId, email, hostname, accessPolicy = null, runCf = defaultRunCf }) {
+/** Create or reuse cfmon's Access resources, including the shared Agent Service Token. */
+export async function configureAccess({
+  accountId,
+  email,
+  hostname,
+  accessPolicy = null,
+  existingClientId = process.env.CFMON_ACCESS_CLIENT_ID,
+  existingClientSecret = process.env.CFMON_ACCESS_CLIENT_SECRET,
+  runCf = defaultRunCf,
+}) {
   if (typeof accountId !== 'string' || !accountId || typeof email !== 'string' || !email.includes('@')) {
     throw new Error('Cloudflare OAuth account情報を取得できませんでした。');
   }
@@ -306,6 +405,13 @@ export async function configureAccess({ accountId, email, hostname, accessPolicy
   if (typeof idp?.id !== 'string' || !idp.id) throw new Error('Cloudflare Access email identity provider を取得できませんでした。');
   const idpIds = [...new Set([...providers.map((provider) => provider.id), idp.id].filter(Boolean))];
 
+  const serviceToken = ensureManagedServiceToken({
+    accountId,
+    existingClientId,
+    existingClientSecret,
+    runCf,
+  });
+
   const apps = listOf(call(['zero-trust', 'access', 'applications', 'list', '--domain', hostname, '--exact', '--per-page', '100']));
   const matches = apps.filter((app) => app.domain === hostname || (app.destinations ?? []).some((destination) => destination.uri === hostname));
   if (matches.length > 1) throw new Error('同じhostnameのAccess appが複数あります。Cloudflare Zero Trustで整理してください。');
@@ -315,16 +421,29 @@ export async function configureAccess({ accountId, email, hostname, accessPolicy
   }
   let detail = null;
   if (app) detail = resultOf(call(['zero-trust', 'access', 'applications', 'get', app.id]));
-  if (!accessPolicy) accessPolicy = ensureManagedPolicy({ accountId, email, runCf });
+  const policies = listOf(call(['zero-trust', 'access', 'policies', 'list', '--per-page', '100']));
+  if (!accessPolicy) accessPolicy = ensureManagedPolicy({ accountId, email, policies, runCf });
+  const servicePolicy = ensureManagedServicePolicy({
+    accountId,
+    serviceTokenId: serviceToken.id,
+    policies,
+    runCf,
+  });
 
   let response;
   if (!app) {
-    response = resultOf(call(['zero-trust', 'access', 'applications', 'create', '--body', JSON.stringify(appBody(null, { hostname, accountId, idpIds, accessPolicy }))]));
+    response = resultOf(call(['zero-trust', 'access', 'applications', 'create', '--body', JSON.stringify(appBody(null, { hostname, accountId, idpIds, accessPolicy, servicePolicy }))]));
   } else {
-    const body = appBody(detail, { hostname, accountId, idpIds, accessPolicy });
+    const body = appBody(detail, { hostname, accountId, idpIds, accessPolicy, servicePolicy });
     response = resultOf(call(['zero-trust', 'access', 'applications', 'update', app.id, '--body', JSON.stringify(body)]));
   }
   const aud = response?.aud ?? response?.aud_tag ?? app?.aud;
   if (typeof aud !== 'string' || !aud) throw new Error('Cloudflare Access app の AUD を取得できませんでした。');
-  return { teamDomain, aud };
+  return {
+    teamDomain,
+    aud,
+    serviceTokenId: serviceToken.id,
+    clientId: serviceToken.clientId,
+    clientSecret: serviceToken.clientSecret,
+  };
 }

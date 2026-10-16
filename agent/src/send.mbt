@@ -107,7 +107,7 @@ fn pair_body(host : String, os : String) -> String {
 fn ensure_paired(pair_url : String, dir : String, host : String, once : Bool) -> Bool {
   let fp = fingerprint(@utf8.encode(dir))
   if fp == "" {
-    eprintln("unable to create or read the private key in cfmon state directory")
+    eprintln("unable to create or read the agent token in cfmon state directory")
     process_exit(2)
   }
   eprintln("cfmon key fingerprint: \{fp}")
@@ -119,7 +119,7 @@ fn ensure_paired(pair_url : String, dir : String, host : String, once : Bool) ->
       return true
     }
     if status == 403 {
-      eprintln("pairing was rejected (the key may be revoked); check Dashboard status")
+      eprintln("pairing was rejected (the agent may be revoked); check Dashboard status")
       process_exit(2)
     }
     if status != 202 {
@@ -196,6 +196,9 @@ fn run_agent() -> Unit {
     if status == 403 {
       eprintln("metric request was rejected; check Dashboard approval status")
       process_exit(2)
+    }
+    if (status == 401 || status == 302) && !once {
+      paired = false
     }
     if status < 200 || status >= 300 {
       eprintln("failed to send metrics (HTTP \{status})")

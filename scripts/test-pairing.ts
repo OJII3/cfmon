@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, createPrivateKey, createPublicKey, randomBytes, sign } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
@@ -42,27 +42,34 @@ try {
   assert.equal(agents.length, 1);
   const registered = agents[0];
   assert.ok(pending.stderr.includes(registered.fingerprint), 'Native and Worker fingerprints differ');
-  assert.equal((await stat(join(state, 'agent.ed25519'))).mode & 0o777, 0o600);
+  assert.equal((await stat(join(state, 'agent.token'))).mode & 0o777, 0o600);
+  await assert.rejects(stat(join(state, 'service.token')));
   assert.equal((await admin(`/api/v1/agents/${registered.public_key}/approve`, { fingerprint: '0'.repeat(64) })).status, 404);
   assert.equal((await admin(`/api/v1/agents/${registered.public_key}/approve`, { fingerprint: registered.fingerprint })).status, 200);
   const approved = agent();
   assert.equal(approved.status, 0, approved.stderr);
-  const rawPrivate = await readFile(join(state, 'agent.ed25519'));
-  const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), rawPrivate]), format: 'der', type: 'pkcs8' });
-  const publicKey = createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32);
-  assert.equal(createHash('sha256').update(publicKey).digest('hex'), registered.fingerprint);
+  const rawToken = await readFile(join(state, 'agent.token'));
+  assert.equal(rawToken.length, 32);
+  assert.equal(createHash('sha256').update(rawToken).digest('hex'), registered.fingerprint);
+  assert.equal((await stat(join(state, 'service.token'))).mode & 0o777, 0o600);
+  const serviceTokenLines = (await readFile(join(state, 'service.token'), 'utf8')).trim().split('\n');
+  assert.deepEqual(serviceTokenLines, ['dev-access-client-id.access', 'dev-access-client-secret']);
+  const tokenHex = rawToken.toString('hex');
   const body = JSON.stringify({ host: 'cfmon-e2e', os: 'linux', cpu: 0.3, memory: 0.7, load1: 1, disk: 0.5, rx_bps: 10, tx_bps: 20, uptime: 300 });
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const nonce = randomBytes(16).toString('hex');
-  const signature = sign(null, Buffer.from(`POST\n/api/v1/ingest\n${timestamp}\n${nonce}\n${body}`), privateKey).toString('hex');
-  const init = { method: 'POST', body, headers: { 'X-Cfmon-Key': registered.public_key, 'X-Cfmon-Timestamp': timestamp, 'X-Cfmon-Nonce': nonce, 'X-Cfmon-Signature': signature } };
-  assert.equal((await fetch(`${base}/api/v1/ingest`, { ...init, body: body.replace('0.3', '0.4') })).status, 403);
-  assert.equal((await fetch(`${base}/api/v1/ingest`, init)).status, 202);
-  assert.equal((await fetch(`${base}/api/v1/ingest`, init)).status, 401);
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${tokenHex}`,
+    'CF-Access-Client-Id': serviceTokenLines[0],
+    'CF-Access-Client-Secret': serviceTokenLines[1],
+  };
+  assert.equal((await fetch(`${base}/api/v1/ingest`, { method: 'POST', body, headers: { Authorization: `Bearer ${tokenHex}` } })).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/ingest`, { method: 'POST', body, headers: { ...headers, 'CF-Access-Client-Secret': 'wrong' } })).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/ingest`, { method: 'POST', body: body.replace('cfmon-e2e', 'other-host'), headers })).status, 403);
+  assert.equal((await fetch(`${base}/api/v1/ingest`, { method: 'POST', body, headers })).status, 202);
   assert.equal((await admin(`/api/v1/agents/${registered.public_key}/revoke`, {})).status, 200);
   const revoked = agent();
   assert.equal(revoked.status, 2, revoked.stderr);
-  console.log('Native Agent → local Worker/D1: pairing, approval, signature, replay and revocation passed');
+  console.log('Native Agent → local Worker/D1: pairing, approval, Service Token delivery, ingest and revocation passed');
 } finally {
   if (server && server.exitCode === null) {
     process.kill(-server.pid, 'SIGTERM');

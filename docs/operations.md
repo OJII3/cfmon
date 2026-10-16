@@ -6,7 +6,7 @@ Dashboard の「インストールコマンドをコピー」を押し、監視�
 
 Linux x86_64 / arm64（Raspberry Pi など）と macOS arm64 に対応しています。
 
-Agent は初回起動時に Ed25519 鍵を作り、公開指紋を表示して承認を待ちます。Dashboard の指紋と Agent 側の SHA-256 指紋が一致することを確認してから承認してください。ホスト名だけでは承認しないでください。承認後にメトリクスの送信が始まります。
+Agent は初回起動時にランダムな Agent トークン (`agent.token`) を作り、SHA-256 指紋を表示して承認を待ちます。Dashboard の指紋と Agent 側の SHA-256 指紋が一致することを確認してから承認してください。ホスト名だけでは承認しないでください。承認すると Worker から Cloudflare Access Service Token (`service.token`) が自動配布され、メトリクスの送信が始まります。
 
 ## ログ
 
@@ -22,7 +22,7 @@ systemd user service がない Linux 環境では、インストーラーが表�
 
 - Agent バイナリ: `$HOME/.local/bin/cfmon-agent`
 - Agent の接続設定: `$HOME/.config/cfmon/agent.env`
-- 秘密鍵: `$XDG_STATE_HOME/cfmon`（未設定時は `$HOME/.local/state/cfmon`）
+- 認証トークン (`agent.token`, `service.token`): `$XDG_STATE_HOME/cfmon`（未設定時は `$HOME/.local/state/cfmon`）
 
 Agent の設定は環境変数で変更できます。
 
@@ -31,11 +31,11 @@ Agent の設定は環境変数で変更できます。
 | `CFMON_URL` | ingest の完全な URL。本番では HTTPS、ローカルテストでは loopback HTTP を使用します。 |
 | `CFMON_HOST` | 省略時は OS の hostname。1〜128文字で、英数字で始まり、英数字・`.`・`_`・`-` を使用できます。ホストごとに異なる ID を使ってください。 |
 | `CFMON_INTERVAL_SECONDS` | 送信間隔。既定値は30秒です。 |
-| `CFMON_STATE_DIR` | 鍵を保存するディレクトリ。既定値は `$XDG_STATE_HOME/cfmon`、未設定時は `$HOME/.local/state/cfmon` です。 |
+| `CFMON_STATE_DIR` | トークンを保存するディレクトリ。既定値は `$XDG_STATE_HOME/cfmon`、未設定時は `$HOME/.local/state/cfmon` です。 |
 
-## 鍵の失効と再登録
+## 失効と再登録
 
-秘密鍵は Agent が管理します。同じ鍵で再起動すれば再承認は不要です。Dashboard で登録を解除すると送信権限が失効します。再登録する場合は Agent を停止し、新しい状態ディレクトリで起動して、表示される指紋を確認してから承認してください。
+認証トークンは Agent が管理します。同じ状態ディレクトリで再起動すれば再承認は不要です。Dashboard で登録を解除すると送信権限が失効します。再登録する場合は Agent を停止し、新しい状態ディレクトリ（または `agent.token` を削除した状態）で起動して、表示される指紋を確認してから承認してください。
 
 ## 収集メトリクス
 

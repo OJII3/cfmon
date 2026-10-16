@@ -1,21 +1,18 @@
 import type { Env } from "./index";
 import { isValidHostId } from "./ingest";
-import { localBypass, sameOrigin } from "./auth";
+import { localBypass, requireServiceAccess, sameOrigin } from "./auth";
 
 const MAX_BODY_BYTES = 16 * 1024;
-const TIMESTAMP_WINDOW = 300;
-const NONCE_TTL = 600;
 const PENDING_TTL = 900;
-const encoder = new TextEncoder();
 
-type SignedRequest = { publicKey: string; fingerprint: string; body: Uint8Array };
+type VerifiedAgentRequest = { publicKey: string; fingerprint: string; body: Uint8Array };
 type JsonResponse = (data: unknown, status?: number) => Response;
 
-async function digest(bytes: BufferSource): Promise<Uint8Array> {
+export async function digest(bytes: BufferSource): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 }
 
-function hex(bytes: Uint8Array): string {
+export function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -44,39 +41,21 @@ async function readBody(request: Request): Promise<Uint8Array | null> {
   return body;
 }
 
-export async function verifySignedRequest(request: Request): Promise<SignedRequest | null> {
-  const keyHex = request.headers.get("X-Cfmon-Key") ?? "";
-  const timestamp = request.headers.get("X-Cfmon-Timestamp") ?? "";
-  const nonce = request.headers.get("X-Cfmon-Nonce") ?? "";
-  const signatureHex = request.headers.get("X-Cfmon-Signature") ?? "";
-  const rawKey = fromHex(keyHex, 32);
-  const signature = fromHex(signatureHex, 64);
-  if (!rawKey || !signature || !/^[0-9]+$/.test(timestamp) || !/^[0-9a-f]{32}$/.test(nonce)) return null;
-  const seconds = Number(timestamp);
-  if (!Number.isSafeInteger(seconds) || Math.abs(Math.floor(Date.now() / 1000) - seconds) > TIMESTAMP_WINDOW) return null;
-  const body = await readBody(request);
-  if (!body) return null;
-  try {
-    const publicKey = await crypto.subtle.importKey("raw", rawKey, { name: "Ed25519" }, false, ["verify"]);
-    const signed = encoder.encode(`${request.method.toUpperCase()}\n${new URL(request.url).pathname}\n${timestamp}\n${nonce}\n`);
-    const message = new Uint8Array(signed.length + body.length);
-    message.set(signed);
-    message.set(body, signed.length);
-    if (!await crypto.subtle.verify("Ed25519", publicKey, signature, message)) return null;
-  } catch {
-    return null;
-  }
-  return { publicKey: keyHex, fingerprint: hex(await digest(rawKey)), body };
+function extractAgentTokenHex(request: Request): string {
+  const auth = request.headers.get("authorization") ?? "";
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (match) return match[1].trim();
+  return (request.headers.get("x-cfmon-token") ?? "").trim();
 }
 
-async function consumeNonce(env: Env, signed: SignedRequest, nonce: string): Promise<"ok" | "replay" | "unavailable"> {
-  try {
-    await env.REGISTRY.prepare("INSERT INTO request_nonces (public_key, nonce, expires_at) VALUES (?, ?, ?)")
-      .bind(signed.publicKey, nonce, Math.floor(Date.now() / 1000) + NONCE_TTL).run();
-    return "ok";
-  } catch (error) {
-    return /unique|constraint/i.test(String(error)) ? "replay" : "unavailable";
-  }
+export async function verifyAgentRequest(request: Request): Promise<VerifiedAgentRequest | null> {
+  const tokenHex = extractAgentTokenHex(request);
+  const rawToken = fromHex(tokenHex, 32);
+  if (!rawToken) return null;
+  const body = await readBody(request);
+  if (!body) return null;
+  const fingerprint = hex(await digest(rawToken));
+  return { publicKey: fingerprint, fingerprint, body };
 }
 
 function parseBody(bytes: Uint8Array): Record<string, unknown> | null {
@@ -86,6 +65,20 @@ function parseBody(bytes: Uint8Array): Record<string, unknown> | null {
   } catch { return null; }
 }
 
+function approvedResponse(env: Env, fingerprint: string, json: JsonResponse): Response {
+  const clientId = env.ACCESS_CLIENT_ID?.trim();
+  const clientSecret = env.ACCESS_CLIENT_SECRET?.trim();
+  if (!clientId || clientId === "setup-pending" || !clientSecret || clientSecret === "setup-pending") {
+    return json({ error: "service_unavailable" }, 503);
+  }
+  return json({
+    status: "approved",
+    fingerprint,
+    access_client_id: clientId,
+    access_client_secret: clientSecret,
+  }, 200);
+}
+
 export async function handlePair(request: Request, env: Env, json: JsonResponse): Promise<Response> {
   if (!env.REGISTRY) return json({ error: "service_unavailable" }, 503);
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
@@ -93,48 +86,45 @@ export async function handlePair(request: Request, env: Env, json: JsonResponse)
     const outcome = await env.PAIR_RATE_LIMIT.limit({ key: ip });
     if (!outcome.success) return json({ error: "rate_limited" }, 429);
   } else if (!localBypass(request, env)) return json({ error: "service_unavailable" }, 503);
-  const signed = await verifySignedRequest(request);
-  if (!signed) return json({ error: "invalid_signature" }, 403);
-  const nonce = request.headers.get("X-Cfmon-Nonce")!;
-  const nonceResult = await consumeNonce(env, signed, nonce);
-  if (nonceResult === "replay") return json({ error: "replay" }, 401);
-  if (nonceResult === "unavailable") return json({ error: "service_unavailable" }, 503);
-  const body = parseBody(signed.body);
+  const verified = await verifyAgentRequest(request);
+  if (!verified) return json({ error: "invalid_token" }, 401);
+  const body = parseBody(verified.body);
   if (!body || typeof body.host !== "string" || !isValidHostId(body.host) || typeof body.os !== "string" || body.os.length > 128) {
     return json({ error: "invalid_payload" }, 400);
   }
-  const current = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(signed.publicKey).first<{ host: string; status: string }>();
-  if (current?.status === "revoked") return json({ status: "revoked", fingerprint: signed.fingerprint }, 403);
+  const current = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(verified.publicKey).first<{ host: string; status: string }>();
+  if (current?.status === "revoked") return json({ status: "revoked", fingerprint: verified.fingerprint }, 403);
   if (current?.status === "approved") {
     if (current.host !== body.host) return json({ error: "host_mismatch" }, 403);
-    await env.REGISTRY.prepare("UPDATE agents SET last_requested_at = ? WHERE public_key = ? AND status = 'approved' AND host = ?").bind(Math.floor(Date.now() / 1000), signed.publicKey, body.host).run();
-    const latest = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(signed.publicKey).first<{ host: string; status: string }>();
-    if (latest?.status === "revoked") return json({ status: "revoked", fingerprint: signed.fingerprint }, 403);
+    await env.REGISTRY.prepare("UPDATE agents SET last_requested_at = ? WHERE public_key = ? AND status = 'approved' AND host = ?").bind(Math.floor(Date.now() / 1000), verified.publicKey, body.host).run();
+    const latest = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(verified.publicKey).first<{ host: string; status: string }>();
+    if (latest?.status === "revoked") return json({ status: "revoked", fingerprint: verified.fingerprint }, 403);
     if (latest?.status !== "approved" || latest.host !== body.host) return json({ error: "host_mismatch" }, 403);
-    return json({ status: "approved", fingerprint: signed.fingerprint }, 200);
+    return approvedResponse(env, verified.fingerprint, json);
   }
   await env.REGISTRY.prepare(`INSERT INTO agents (public_key, fingerprint, host, os, status, last_requested_at)
     VALUES (?, ?, ?, ?, 'pending', ?)
     ON CONFLICT(public_key) DO UPDATE SET fingerprint = excluded.fingerprint, host = excluded.host, os = excluded.os, status = 'pending', last_requested_at = excluded.last_requested_at
     WHERE agents.status = 'pending'`)
-    .bind(signed.publicKey, signed.fingerprint, body.host, body.os, Math.floor(Date.now() / 1000)).run();
-  const latest = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(signed.publicKey).first<{ host: string; status: string }>();
-  if (latest?.status === "revoked") return json({ status: "revoked", fingerprint: signed.fingerprint }, 403);
+    .bind(verified.publicKey, verified.fingerprint, body.host, body.os, Math.floor(Date.now() / 1000)).run();
+  const latest = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(verified.publicKey).first<{ host: string; status: string }>();
+  if (latest?.status === "revoked") return json({ status: "revoked", fingerprint: verified.fingerprint }, 403);
   if (latest?.status === "approved") {
     if (latest.host !== body.host) return json({ error: "host_mismatch" }, 403);
-    return json({ status: "approved", fingerprint: signed.fingerprint }, 200);
+    return approvedResponse(env, verified.fingerprint, json);
   }
   if (latest?.status !== "pending") return json({ error: "service_unavailable" }, 503);
-  return json({ status: "pending", fingerprint: signed.fingerprint }, 202);
+  return json({ status: "pending", fingerprint: verified.fingerprint }, 202);
 }
 
 export async function handleIngest(request: Request, env: Env, json: JsonResponse): Promise<Response> {
   if (!env.REGISTRY || !env.METRICS) return json({ error: "service_unavailable" }, 503);
-  const signed = await verifySignedRequest(request);
-  if (!signed) return json({ error: "invalid_signature" }, 403);
-  const body = parseBody(signed.body);
+  if (!await requireServiceAccess(request, env)) return json({ error: "unauthorized" }, 401);
+  const verified = await verifyAgentRequest(request);
+  if (!verified) return json({ error: "invalid_token" }, 401);
+  const body = parseBody(verified.body);
   if (!body || typeof body.host !== "string" || !isValidHostId(body.host)) return json({ error: "invalid_payload" }, 400);
-  const agent = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(signed.publicKey).first<{ host: string; status: string }>();
+  const agent = await env.REGISTRY.prepare("SELECT host, status FROM agents WHERE public_key = ?").bind(verified.publicKey).first<{ host: string; status: string }>();
   if (!agent || agent.status !== "approved" || agent.host !== body.host) return json({ error: "forbidden" }, 403);
   const requiredNumbers = ["cpu", "memory", "load1", "disk", "rx_bps", "tx_bps", "uptime"] as const;
   if (body.os !== undefined && (typeof body.os !== "string" || body.os.length > 128)) return json({ error: "invalid_payload" }, 400);
@@ -145,16 +135,12 @@ export async function handleIngest(request: Request, env: Env, json: JsonRespons
   if (!gpuNumbers.every((key) => body[key] === undefined || (typeof body[key] === "number" && Number.isFinite(body[key]) && (Number(body[key]) === -1 || (Number(body[key]) >= 0 && Number(body[key]) <= 1))))) {
     return json({ error: "invalid_payload" }, 400);
   }
-  const nonce = request.headers.get("X-Cfmon-Nonce")!;
-  const nonceResult = await consumeNonce(env, signed, nonce);
-  if (nonceResult === "replay") return json({ error: "replay" }, 401);
-  if (nonceResult === "unavailable") return json({ error: "service_unavailable" }, 503);
   const [cpu, memory, load1, disk, rx, tx, uptime] = requiredNumbers.map((key) => Number(body[key]));
   const [gpuUtilization, gpuMemory] = gpuNumbers.map((key) => body[key] === undefined ? -1 : Number(body[key]));
   try {
     env.METRICS.writeDataPoint({ indexes: [body.host], blobs: [body.host, typeof body.os === "string" ? body.os : ""], doubles: [cpu, memory, load1, disk, rx, tx, uptime, gpuUtilization, gpuMemory] });
   } catch { return json({ error: "upstream_unavailable" }, 502); }
-  await env.REGISTRY.prepare("UPDATE agents SET last_requested_at = ? WHERE public_key = ?").bind(Math.floor(Date.now() / 1000), signed.publicKey).run();
+  await env.REGISTRY.prepare("UPDATE agents SET last_requested_at = ? WHERE public_key = ?").bind(Math.floor(Date.now() / 1000), verified.publicKey).run();
   return json({ ok: true }, 202);
 }
 
@@ -201,8 +187,5 @@ export async function handleAgentAdmin(request: Request, env: Env, json: JsonRes
 export async function cleanupRegistry(env: Env): Promise<void> {
   if (!env.REGISTRY) return;
   const now = Math.floor(Date.now() / 1000);
-  await env.REGISTRY.batch([
-    env.REGISTRY.prepare("DELETE FROM request_nonces WHERE expires_at < ?").bind(now),
-    env.REGISTRY.prepare("DELETE FROM agents WHERE status = 'pending' AND last_requested_at < ?").bind(now - PENDING_TTL),
-  ]);
+  await env.REGISTRY.prepare("DELETE FROM agents WHERE status = 'pending' AND last_requested_at < ?").bind(now - PENDING_TTL).run();
 }
