@@ -10,6 +10,8 @@ export interface Env {
   ASSETS: Fetcher;
   ACCESS_TEAM_DOMAIN?: string;
   ACCESS_AUD?: string;
+  ACCESS_CLIENT_ID?: string;
+  ACCESS_CLIENT_SECRET?: string;
   DEVELOPMENT?: string;
 }
 

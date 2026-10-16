@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exportJWK, SignJWT } from "jose";
 import app, { type Env } from "../src/index";
+import { digest, hex } from "../src/pairing";
 
-const encoder = new TextEncoder();
-const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+const TEST_CLIENT_ID = "test-service-client-id.access";
+const TEST_CLIENT_SECRET = "test-service-client-secret";
 
 class MemoryRegistry {
   agents = new Map<string, { public_key: string; fingerprint: string; host: string; os: string; status: string; last_requested_at: number }>();
-  nonces = new Set<string>();
   prepare(sql: string) {
     let args: unknown[] = [];
     const stmt = {
@@ -18,11 +18,7 @@ class MemoryRegistry {
         return null;
       },
       run: async () => {
-        if (sql.includes("INSERT INTO request_nonces")) {
-          const nonce = `${args[0]}:${args[1]}`;
-          if (this.nonces.has(nonce)) throw new Error("UNIQUE constraint failed: request_nonces.public_key, request_nonces.nonce");
-          this.nonces.add(nonce);
-        } else if (sql.includes("INSERT INTO agents")) {
+        if (sql.includes("INSERT INTO agents")) {
           const [public_key, fingerprint, host, os, last_requested_at] = args as [string, string, string, string, number];
           this.agents.set(public_key, { public_key, fingerprint, host, os, status: "pending", last_requested_at });
         } else if (sql.includes("UPDATE agents SET status = 'approved'")) {
@@ -45,8 +41,8 @@ class MemoryRegistry {
   async batch() {}
 }
 
-let keyPair: CryptoKeyPair;
-let publicKey: string;
+let agentTokenHex: string;
+let agentFingerprint: string;
 const registry = new MemoryRegistry();
 const writeDataPoint = vi.fn();
 const assetsFetch = vi.fn(async () => new Response("dashboard"));
@@ -56,16 +52,32 @@ const env = (): Env => ({
   REGISTRY: registry as unknown as D1Database,
   PAIR_RATE_LIMIT: { limit: async () => ({ success: true }) } as RateLimit,
   ASSETS: { fetch: assetsFetch } as unknown as Fetcher,
+  ACCESS_CLIENT_ID: TEST_CLIENT_ID,
+  ACCESS_CLIENT_SECRET: TEST_CLIENT_SECRET,
   DEVELOPMENT: "true",
 });
 
-async function signedRequest(path: string, body: unknown, nonce = crypto.randomUUID().replaceAll("-", "").slice(0, 32), timestamp = String(Math.floor(Date.now() / 1000))) {
+async function generateAgentToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  agentTokenHex = hex(bytes);
+  agentFingerprint = hex(await digest(bytes));
+}
+
+function agentRequest(path: string, body: unknown, extraHeaders: Record<string, string> = {}) {
   const payload = JSON.stringify(body);
-  const message = encoder.encode(`POST\n${path}\n${timestamp}\n${nonce}\n${payload}`);
-  const signature = new Uint8Array(await crypto.subtle.sign("Ed25519", keyPair.privateKey, message));
   return new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Cfmon-Key": publicKey, "X-Cfmon-Timestamp": timestamp, "X-Cfmon-Nonce": nonce, "X-Cfmon-Signature": hex(signature) },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${agentTokenHex}`,
+      ...(path === "/api/v1/ingest"
+        ? {
+            "CF-Access-Client-Id": TEST_CLIENT_ID,
+            "CF-Access-Client-Secret": TEST_CLIENT_SECRET,
+          }
+        : {}),
+      ...extraHeaders,
+    },
     body: payload,
   });
 }
@@ -108,63 +120,106 @@ describe("Worker auth and query", () => {
     expect((await app.fetch(new Request("https://cfmon.test/api/v1/hosts"), env())).status).toBe(401);
   });
 
-  it("pairs an Ed25519 key, requires approval, validates host and nonce, then supports revocation", async () => {
-    keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]) as CryptoKeyPair;
-    publicKey = hex(new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey) as ArrayBuffer));
+  it("pairs an agent token, requires approval before issuing Service Token, validates host, then supports revocation", async () => {
+    await generateAgentToken();
     const localEnv = env();
 
-    const pair = await app.fetch(await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv);
+    const pair = await app.fetch(agentRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv);
     expect(pair.status).toBe(202);
-    const pairResult = await pair.json() as { fingerprint: string };
-    expect(pairResult.fingerprint).toHaveLength(64);
-
-    const replay = await app.fetch(await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }, "00000000000000000000000000000001"), localEnv);
-    expect(replay.status).toBe(202);
-    const duplicate = await app.fetch(await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }, "00000000000000000000000000000001"), localEnv);
-    expect(duplicate.status).toBe(401);
+    const pairResult = await pair.json() as { status: string; fingerprint: string; access_client_id?: string; access_client_secret?: string };
+    expect(pairResult.fingerprint).toBe(agentFingerprint);
+    expect(pairResult.access_client_id).toBeUndefined();
+    expect(pairResult.access_client_secret).toBeUndefined();
 
     const metrics = { host: "bronya", os: "linux", cpu: 0.3, memory: 0.7, load1: 1, disk: 0.5, rx_bps: 10, tx_bps: 20, uptime: 300 };
-    const nonceCount = registry.nonces.size;
-    expect((await app.fetch(await signedRequest("/api/v1/ingest", metrics), localEnv)).status).toBe(403);
-    expect(registry.nonces.size).toBe(nonceCount);
-    const approval = new Request(`http://localhost/api/v1/agents/${publicKey}/approve`, { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ fingerprint: pairResult.fingerprint }) });
-    expect((await app.fetch(approval, localEnv)).status).toBe(200);
-    expect((await app.fetch(await signedRequest("/api/v1/ingest", metrics), localEnv)).status).toBe(202);
-    expect(writeDataPoint).toHaveBeenCalledOnce();
-    expect((await app.fetch(await signedRequest("/api/v1/ingest", { ...metrics, host: "other" }), localEnv)).status).toBe(403);
+    expect((await app.fetch(agentRequest("/api/v1/ingest", metrics), localEnv)).status).toBe(403);
 
-    const approvedPair = keyPair;
-    const approvedPublicKey = publicKey;
-    keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]) as CryptoKeyPair;
-    publicKey = hex(new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey) as ArrayBuffer));
-    const duplicatePair = await app.fetch(await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv);
+    const approval = new Request(`http://localhost/api/v1/agents/${agentFingerprint}/approve`, {
+      method: "POST",
+      headers: { Origin: "http://localhost", "Content-Type": "application/json" },
+      body: JSON.stringify({ fingerprint: pairResult.fingerprint }),
+    });
+    expect((await app.fetch(approval, localEnv)).status).toBe(200);
+
+    const approvedPair = await app.fetch(agentRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv);
+    expect(approvedPair.status).toBe(200);
+    expect(await approvedPair.json()).toEqual({
+      status: "approved",
+      fingerprint: agentFingerprint,
+      access_client_id: TEST_CLIENT_ID,
+      access_client_secret: TEST_CLIENT_SECRET,
+    });
+
+    expect((await app.fetch(agentRequest("/api/v1/ingest", metrics), localEnv)).status).toBe(202);
+    expect(writeDataPoint).toHaveBeenCalledOnce();
+    expect((await app.fetch(agentRequest("/api/v1/ingest", { ...metrics, host: "other" }), localEnv)).status).toBe(403);
+
+    const approvedTokenHex = agentTokenHex;
+    const approvedFingerprint = agentFingerprint;
+    await generateAgentToken();
+    const duplicatePair = await app.fetch(agentRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv);
     const duplicateFingerprint = (await duplicatePair.json() as { fingerprint: string }).fingerprint;
     expect(duplicatePair.status).toBe(202);
-    const duplicateApproval = new Request(`http://localhost/api/v1/agents/${publicKey}/approve`, { method: "POST", headers: { Origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify({ fingerprint: duplicateFingerprint }) });
+    const duplicateApproval = new Request(`http://localhost/api/v1/agents/${agentFingerprint}/approve`, {
+      method: "POST",
+      headers: { Origin: "http://localhost", "Content-Type": "application/json" },
+      body: JSON.stringify({ fingerprint: duplicateFingerprint }),
+    });
     expect((await app.fetch(duplicateApproval, localEnv)).status).toBe(409);
-    keyPair = approvedPair;
-    publicKey = approvedPublicKey;
+    agentTokenHex = approvedTokenHex;
+    agentFingerprint = approvedFingerprint;
 
-    const revoke = new Request(`http://localhost/api/v1/agents/${publicKey}/revoke`, { method: "POST", headers: { Origin: "http://localhost" }, body: "{}" });
+    const revoke = new Request(`http://localhost/api/v1/agents/${agentFingerprint}/revoke`, {
+      method: "POST",
+      headers: { Origin: "http://localhost" },
+      body: "{}",
+    });
     expect((await app.fetch(revoke, localEnv)).status).toBe(200);
-    expect((await app.fetch(await signedRequest("/api/v1/ingest", metrics), localEnv)).status).toBe(403);
-    expect((await app.fetch(await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv)).status).toBe(403);
+    expect((await app.fetch(agentRequest("/api/v1/ingest", metrics), localEnv)).status).toBe(403);
+    expect((await app.fetch(agentRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv)).status).toBe(403);
   });
 
-  it("rejects stale signed requests and cross-origin admin mutations", async () => {
-    keyPair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]) as CryptoKeyPair;
-    publicKey = hex(new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey) as ArrayBuffer));
-    const stale = await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }, "00000000000000000000000000000003", String(Math.floor(Date.now() / 1000) - 301));
-    expect((await app.fetch(stale, env())).status).toBe(403);
-    const original = await signedRequest("/api/v1/pair", { host: "bronya", os: "linux" }, "00000000000000000000000000000004");
-    const tamperedBody = new Request(original.url, { method: "POST", headers: original.headers, body: JSON.stringify({ host: "other", os: "linux" }) });
-    expect((await app.fetch(tamperedBody, env())).status).toBe(403);
-    const wrongPath = new Request("http://localhost/api/v1/ingest", { method: "POST", headers: original.headers, body: "{}" });
-    expect((await app.fetch(wrongPath, env())).status).toBe(403);
-    expect((await app.fetch(new Request(`http://localhost/api/v1/agents/${publicKey}/revoke`, { method: "POST", headers: { Origin: "https://evil.test" }, body: "{}" }), env())).status).toBe(403);
+  it("rejects ingest without Service Token, with invalid Service Token, with invalid agent token, and cross-origin admin mutations", async () => {
+    await generateAgentToken();
+    const localEnv = env();
+    const pair = await app.fetch(agentRequest("/api/v1/pair", { host: "bronya", os: "linux" }), localEnv);
+    expect(pair.status).toBe(202);
+    const approval = new Request(`http://localhost/api/v1/agents/${agentFingerprint}/approve`, {
+      method: "POST",
+      headers: { Origin: "http://localhost", "Content-Type": "application/json" },
+      body: JSON.stringify({ fingerprint: agentFingerprint }),
+    });
+    expect((await app.fetch(approval, localEnv)).status).toBe(200);
+
+    const metrics = { host: "bronya", os: "linux", cpu: 0.3, memory: 0.7, load1: 1, disk: 0.5, rx_bps: 10, tx_bps: 20, uptime: 300 };
+    const missingServiceToken = new Request("http://localhost/api/v1/ingest", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${agentTokenHex}`,
+      },
+      body: JSON.stringify(metrics),
+    });
+    expect((await app.fetch(missingServiceToken, localEnv)).status).toBe(401);
+
+    const badServiceSecret = agentRequest("/api/v1/ingest", metrics, {
+      "CF-Access-Client-Secret": "wrong-secret",
+    });
+    expect((await app.fetch(badServiceSecret, localEnv)).status).toBe(401);
+
+    const badAgentToken = agentRequest("/api/v1/ingest", metrics, {
+      Authorization: "Bearer invalid-token",
+    });
+    expect((await app.fetch(badAgentToken, localEnv)).status).toBe(401);
+
+    expect((await app.fetch(new Request(`http://localhost/api/v1/agents/${agentFingerprint}/revoke`, {
+      method: "POST",
+      headers: { Origin: "https://evil.test" },
+      body: "{}",
+    }), localEnv)).status).toBe(403);
   });
 
-  it("accepts a signed Access JWT and rejects a forged one", async () => {
+  it("accepts a signed Access JWT and rejects a forged one or Service Token JWT on admin routes", async () => {
     const accessKeys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]) as CryptoKeyPair;
     const jwk = await exportJWK(accessKeys.publicKey);
     jwk.kid = "access-test";
@@ -172,10 +227,15 @@ describe("Worker auth and query", () => {
     const token = await new SignJWT({ email: "admin@example.com" }).setProtectedHeader({ alg: "RS256", kid: "access-test" })
       .setIssuer("https://team.cloudflareaccess.com").setAudience("audience").setSubject("user-1")
       .setIssuedAt().setExpirationTime("5m").sign(accessKeys.privateKey);
+    const serviceTokenJwt = await new SignJWT({ common_name: TEST_CLIENT_ID }).setProtectedHeader({ alg: "RS256", kid: "access-test" })
+      .setIssuer("https://team.cloudflareaccess.com").setAudience("audience")
+      .setIssuedAt().setExpirationTime("5m").sign(accessKeys.privateKey);
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ keys: [jwk] })));
     const localEnv = { ...env(), ACCESS_TEAM_DOMAIN: "team.cloudflareaccess.com", ACCESS_AUD: "audience" };
     const valid = await app.fetch(new Request("https://cfmon.test/api/v1/hosts", { headers: { "CF-Access-JWT-Assertion": token } }), localEnv);
     expect(valid.status).toBe(200);
+    const serviceOnAdmin = await app.fetch(new Request("https://cfmon.test/api/v1/hosts", { headers: { "CF-Access-JWT-Assertion": serviceTokenJwt } }), localEnv);
+    expect(serviceOnAdmin.status).toBe(401);
     const forged = await app.fetch(new Request("https://cfmon.test/api/v1/hosts", { headers: { "CF-Access-JWT-Assertion": `${token.slice(0, -3)}bad` } }), localEnv);
     expect(forged.status).toBe(401);
     const wrongAudience = await new SignJWT({ email: "admin@example.com" }).setProtectedHeader({ alg: "RS256", kid: "access-test" })

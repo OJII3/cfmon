@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -8,6 +8,7 @@ import { loginAndSelectAccount, configureAccess, selectDeploymentDomain, selectR
 const root = fileURLToPath(new URL('../', import.meta.url));
 const worker = resolve(root, 'worker');
 const envPath = resolve(worker, '.env');
+const secretsPath = resolve(worker, '.secrets.json');
 const setup = process.argv.includes('--setup');
 const dryRun = process.argv.includes('--dry-run');
 
@@ -49,13 +50,15 @@ function listOf(value) {
   return [];
 }
 
-async function saveLocalConfig({ accountId, databaseId, customDomain, teamDomain, aud }) {
+async function saveLocalConfig({ accountId, databaseId, customDomain, teamDomain, aud, clientId, clientSecret }) {
   const rows = [
     `CLOUDFLARE_ACCOUNT_ID=${accountId}`,
     `CFMON_D1_ID=${databaseId}`,
     `CFMON_CUSTOM_DOMAIN=${customDomain ?? ''}`,
     `CFMON_ACCESS_TEAM_DOMAIN=${teamDomain ?? 'setup-pending.cloudflareaccess.com'}`,
     `CFMON_ACCESS_AUD=${aud ?? 'setup-pending'}`,
+    `CFMON_ACCESS_CLIENT_ID=${clientId ?? 'setup-pending'}`,
+    `CFMON_ACCESS_CLIENT_SECRET=${clientSecret ?? ''}`,
   ];
   await writeFile(envPath, `${rows.join('\n')}\n`, { mode: 0o600 });
 }
@@ -72,13 +75,29 @@ async function loadLocalConfig() {
     CFMON_CUSTOM_DOMAIN: values.CFMON_CUSTOM_DOMAIN,
     CFMON_ACCESS_TEAM_DOMAIN: values.CFMON_ACCESS_TEAM_DOMAIN,
     CFMON_ACCESS_AUD: values.CFMON_ACCESS_AUD,
+    CFMON_ACCESS_CLIENT_ID: values.CFMON_ACCESS_CLIENT_ID,
+    CFMON_ACCESS_CLIENT_SECRET: values.CFMON_ACCESS_CLIENT_SECRET,
   };
   Object.assign(process.env, Object.fromEntries(Object.entries(config).filter(([, value]) => typeof value === 'string')));
   return config;
 }
 
+async function runCfDeploy(extraArgs = [], { capture = false } = {}) {
+  const clientSecret = process.env.CFMON_ACCESS_CLIENT_SECRET?.trim();
+  const args = ['deploy', ...extraArgs];
+  if (clientSecret) {
+    await writeFile(secretsPath, `${JSON.stringify({ ACCESS_CLIENT_SECRET: clientSecret })}\n`, { mode: 0o600 });
+    args.push('--secrets-file', secretsPath);
+  }
+  try {
+    return runCf(args, { capture });
+  } finally {
+    await rm(secretsPath, { force: true });
+  }
+}
+
 async function deploy() {
-  const result = runCf(['deploy'], { capture: true });
+  const result = await runCfDeploy([], { capture: true });
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   if (process.env.CFMON_CUSTOM_DOMAIN) return `https://${process.env.CFMON_CUSTOM_DOMAIN}`;
@@ -92,10 +111,12 @@ async function main() {
   if (setup && dryRun) throw new Error('--setup と --dry-run は同時に指定できません');
   run('npm', ['ci'], worker);
   if (setup) {
+    const previous = await readFile(envPath, 'utf8').catch(() => '');
     if (!process.env.CLOUDFLARE_ACCOUNT_ID) {
-      const previous = await readFile(envPath, 'utf8').catch(() => '');
       process.env.CLOUDFLARE_ACCOUNT_ID = previous.match(/^CLOUDFLARE_ACCOUNT_ID=(.+)$/m)?.[1] ?? '';
     }
+    const existingClientId = process.env.CFMON_ACCESS_CLIENT_ID || previous.match(/^CFMON_ACCESS_CLIENT_ID=(.+)$/m)?.[1] || '';
+    const existingClientSecret = process.env.CFMON_ACCESS_CLIENT_SECRET || previous.match(/^CFMON_ACCESS_CLIENT_SECRET=(.+)$/m)?.[1] || '';
     const { accountId, email } = await loginAndSelectAccount();
     const customDomain = await selectDeploymentDomain({ accountId });
     const accessPolicy = await selectReusablePolicy({ accountId });
@@ -119,8 +140,15 @@ async function main() {
     runCf(['d1', 'migrations', 'apply', databaseId, '--dir', 'migrations']);
     console.log('Worker を初回デプロイしています…');
     let url = await deploy();
-    const { teamDomain, aud } = await configureAccess({ accountId, email, hostname: url, accessPolicy });
-    await saveLocalConfig({ accountId, databaseId, customDomain, teamDomain, aud });
+    const { teamDomain, aud, clientId, clientSecret } = await configureAccess({
+      accountId,
+      email,
+      hostname: url,
+      accessPolicy,
+      existingClientId,
+      existingClientSecret,
+    });
+    await saveLocalConfig({ accountId, databaseId, customDomain, teamDomain, aud, clientId, clientSecret });
     await loadLocalConfig();
     console.log('Access 認証を反映しています…');
     url = await deploy();
@@ -141,14 +169,20 @@ async function main() {
     }
   }
   if (!dryRun && local) {
-    if (!/^CFMON_D1_ID=(?!0+$).+/m.test(local) || !/^CFMON_ACCESS_TEAM_DOMAIN=(?!setup-pending).+/m.test(local) || !/^CFMON_ACCESS_AUD=(?!setup-pending$).+/m.test(local)) {
+    if (
+      !/^CFMON_D1_ID=(?!0+$).+/m.test(local) ||
+      !/^CFMON_ACCESS_TEAM_DOMAIN=(?!setup-pending).+/m.test(local) ||
+      !/^CFMON_ACCESS_AUD=(?!setup-pending$).+/m.test(local) ||
+      !/^CFMON_ACCESS_CLIENT_ID=(?!setup-pending$).+/m.test(local) ||
+      !/^CFMON_ACCESS_CLIENT_SECRET=.+/m.test(local)
+    ) {
       throw new Error('セットアップが未完了です。npm run setup を実行してください');
     }
   }
   run('npm', ['ci'], resolve(root, 'dashboard'));
   run('npm', ['run', 'build'], resolve(root, 'dashboard'));
   if (dryRun) {
-    runCf(['deploy', '--dry-run']);
+    await runCfDeploy(['--dry-run']);
     return;
   }
   const url = await deploy();

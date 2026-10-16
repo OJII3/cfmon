@@ -12,4 +12,5 @@ agent/target/
 *.tsbuildinfo
 worker/wrangler.local.json
 worker/wrangler.dev.json
+worker/.secrets.json
 .cfmon/

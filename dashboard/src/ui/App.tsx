@@ -318,7 +318,7 @@ function App() {
           <Stack gap="sm" mt="sm">
             {pendingAgents.map((agent) => <Paper withBorder p="lg" key={agent.public_key}>
               <Box><Badge color="yellow" variant="light">承認待ち</Badge><Title order={3} mt="sm">{agent.host}</Title><Text size="xs" c="dimmed">{agent.os || 'OS 不明'} · 登録申請 {formatAge(agent.last_requested_at)}</Text></Box>
-              <Text size="xs" c="dimmed" mt="lg" mb="xs">公開鍵の指紋 <Text component="span" size="xs" c="dimmed" ff="monospace">SHA-256</Text></Text>
+              <Text size="xs" c="dimmed" mt="lg" mb="xs">Agent トークンの指紋 <Text component="span" size="xs" c="dimmed" ff="monospace">SHA-256</Text></Text>
               <Code block style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{formatFingerprint(agent.fingerprint)}</Code>
               <Stack gap="sm" mt="md">
                 <Checkbox checked={!!checked[agent.public_key]} onChange={(event) => setChecked((current) => ({ ...current, [agent.public_key]: event.currentTarget.checked }))} label="Agent 画面の指紋と一致することを確認しました" />

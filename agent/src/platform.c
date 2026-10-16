@@ -3,7 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <openssl/evp.h>
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <stdio.h>
@@ -44,9 +44,24 @@ static moonbit_string_t from_ascii(const char *s) {
   return out;
 }
 
-static size_t discard_body(char *ptr, size_t size, size_t nmemb, void *userdata) {
-  (void)ptr; (void)userdata;
-  return size * nmemb;
+struct response_buffer {
+  char data[4096];
+  size_t len;
+};
+
+static size_t capture_body(char *ptr, size_t size, size_t nmemb, void *userdata) {
+  size_t total = size * nmemb;
+  struct response_buffer *buf = (struct response_buffer *)userdata;
+  if (buf && buf->len + 1 < sizeof(buf->data)) {
+    size_t copy = total;
+    if (buf->len + copy >= sizeof(buf->data)) {
+      copy = sizeof(buf->data) - buf->len - 1;
+    }
+    memcpy(buf->data + buf->len, ptr, copy);
+    buf->len += copy;
+    buf->data[buf->len] = '\0';
+  }
+  return total;
 }
 
 static int create_parent_dirs(char *path) {
@@ -210,44 +225,38 @@ static int make_state_dir(const char *override, char *out, size_t cap) {
   return 1;
 }
 
-static int key_path(const char *state_arg, char *dir, size_t cap, char *path, size_t path_cap) {
+static int state_file_path(const char *state_arg, const char *filename, char *dir, size_t cap, char *path, size_t path_cap) {
   if (!make_state_dir(state_arg, dir, cap)) return 0;
-  if (snprintf(path, path_cap, "%s/agent.ed25519", dir) >= (int)path_cap) return 0;
+  if (snprintf(path, path_cap, "%s/%s", dir, filename) >= (int)path_cap) return 0;
   return 1;
 }
 
-static int load_or_create_key(const char *state_arg, unsigned char priv[32], unsigned char pub[32]) {
+static int load_or_create_token(const char *state_arg, unsigned char token[32]) {
   char dir[PATH_MAX], path[PATH_MAX];
-  if (!key_path(state_arg, dir, sizeof(dir), path, sizeof(path))) return 0;
+  if (!state_file_path(state_arg, "agent.token", dir, sizeof(dir), path, sizeof(path))) return 0;
   int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0 && errno == ENOENT) {
-    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, NULL);
-    EVP_PKEY *key = NULL;
-    size_t priv_len = 32, pub_len = 32;
-    int ok = ctx && EVP_PKEY_keygen_init(ctx) > 0 && EVP_PKEY_keygen(ctx, &key) > 0 &&
-      EVP_PKEY_get_raw_private_key(key, priv, &priv_len) > 0 && EVP_PKEY_get_raw_public_key(key, pub, &pub_len) > 0;
-    EVP_PKEY_free(key); EVP_PKEY_CTX_free(ctx);
-    if (!ok || priv_len != 32 || pub_len != 32) return 0;
+    if (RAND_bytes(token, 32) != 1) return 0;
     char temp_path[PATH_MAX];
     if (snprintf(temp_path, sizeof(temp_path), "%s.tmp.XXXXXX", path) >= (int)sizeof(temp_path)) {
-      OPENSSL_cleanse(priv, 32); return 0;
+      OPENSSL_cleanse(token, 32); return 0;
     }
     fd = mkstemp(temp_path);
-    if (fd < 0) { OPENSSL_cleanse(priv, 32); return 0; }
+    if (fd < 0) { OPENSSL_cleanse(token, 32); return 0; }
     (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
     size_t off = 0;
     while (off < 32) {
-      ssize_t n = write(fd, priv + off, 32 - off);
-      if (n <= 0) { close(fd); unlink(temp_path); OPENSSL_cleanse(priv, 32); return 0; }
+      ssize_t n = write(fd, token + off, 32 - off);
+      if (n <= 0) { close(fd); unlink(temp_path); OPENSSL_cleanse(token, 32); return 0; }
       off += (size_t)n;
     }
     int write_ok = fsync(fd) == 0 && fchmod(fd, 0600) == 0;
     if (close(fd) != 0) write_ok = 0;
-    if (!write_ok) { unlink(temp_path); OPENSSL_cleanse(priv, 32); return 0; }
+    if (!write_ok) { unlink(temp_path); OPENSSL_cleanse(token, 32); return 0; }
     if (link(temp_path, path) != 0) {
       int existed = errno == EEXIST;
-      unlink(temp_path); OPENSSL_cleanse(priv, 32);
-      return existed ? load_or_create_key(state_arg, priv, pub) : 0;
+      unlink(temp_path); OPENSSL_cleanse(token, 32);
+      return existed ? load_or_create_token(state_arg, token) : 0;
     }
     unlink(temp_path);
     return 1;
@@ -257,18 +266,110 @@ static int load_or_create_key(const char *state_arg, unsigned char priv[32], uns
   int ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() && (st.st_mode & 0777) == 0600 && st.st_size == 32;
   size_t off = 0;
   while (ok && off < 32) {
-    ssize_t n = read(fd, priv + off, 32 - off);
+    ssize_t n = read(fd, token + off, 32 - off);
     if (n <= 0) { ok = 0; break; }
     off += (size_t)n;
   }
   close(fd);
-  if (!ok) { OPENSSL_cleanse(priv, 32); return 0; }
-  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, priv, 32);
-  size_t pub_len = 32;
-  ok = key && EVP_PKEY_get_raw_public_key(key, pub, &pub_len) > 0 && pub_len == 32;
-  EVP_PKEY_free(key);
-  if (!ok) OPENSSL_cleanse(priv, 32);
+  if (!ok) OPENSSL_cleanse(token, 32);
   return ok;
+}
+
+static int valid_header_value(const char *s) {
+  if (!s || !*s) return 0;
+  size_t len = 0;
+  for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
+    if (*p < 0x20 || *p == 0x7f) return 0;
+    if (++len > 256) return 0;
+  }
+  return 1;
+}
+
+static int save_service_token(const char *state_arg, const char *client_id, const char *client_secret) {
+  if (!valid_header_value(client_id) || !valid_header_value(client_secret)) return 0;
+  char dir[PATH_MAX], path[PATH_MAX], temp_path[PATH_MAX];
+  if (!state_file_path(state_arg, "service.token", dir, sizeof(dir), path, sizeof(path))) return 0;
+  if (snprintf(temp_path, sizeof(temp_path), "%s.tmp.XXXXXX", path) >= (int)sizeof(temp_path)) return 0;
+  char content[600];
+  int content_len = snprintf(content, sizeof(content), "%s\n%s\n", client_id, client_secret);
+  if (content_len <= 0 || content_len >= (int)sizeof(content)) return 0;
+  int fd = mkstemp(temp_path);
+  if (fd < 0) return 0;
+  (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+  size_t off = 0;
+  while (off < (size_t)content_len) {
+    ssize_t n = write(fd, content + off, (size_t)content_len - off);
+    if (n <= 0) { close(fd); unlink(temp_path); OPENSSL_cleanse(content, sizeof(content)); return 0; }
+    off += (size_t)n;
+  }
+  OPENSSL_cleanse(content, sizeof(content));
+  int ok = fsync(fd) == 0 && fchmod(fd, 0600) == 0;
+  if (close(fd) != 0) ok = 0;
+  if (!ok || rename(temp_path, path) != 0) {
+    unlink(temp_path);
+    return 0;
+  }
+  return 1;
+}
+
+static int load_service_token(const char *state_arg, char *client_id, size_t id_cap, char *client_secret, size_t secret_cap) {
+  char dir[PATH_MAX], path[PATH_MAX];
+  if (!state_file_path(state_arg, "service.token", dir, sizeof(dir), path, sizeof(path))) return 0;
+  int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) return 0;
+  struct stat st;
+  char buf[600];
+  int ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() &&
+    (st.st_mode & 0777) == 0600 && st.st_size > 2 && st.st_size < (off_t)sizeof(buf);
+  size_t off = 0;
+  while (ok && off < (size_t)st.st_size) {
+    ssize_t n = read(fd, buf + off, (size_t)st.st_size - off);
+    if (n <= 0) { ok = 0; break; }
+    off += (size_t)n;
+  }
+  close(fd);
+  if (!ok) { OPENSSL_cleanse(buf, sizeof(buf)); return 0; }
+  buf[off] = '\0';
+  char *nl1 = strchr(buf, '\n');
+  if (!nl1) { OPENSSL_cleanse(buf, sizeof(buf)); return 0; }
+  *nl1 = '\0';
+  char *secret_start = nl1 + 1;
+  char *nl2 = strchr(secret_start, '\n');
+  if (nl2) *nl2 = '\0';
+  if (!valid_header_value(buf) || !valid_header_value(secret_start) ||
+      snprintf(client_id, id_cap, "%s", buf) >= (int)id_cap ||
+      snprintf(client_secret, secret_cap, "%s", secret_start) >= (int)secret_cap) {
+    OPENSSL_cleanse(buf, sizeof(buf));
+    return 0;
+  }
+  OPENSSL_cleanse(buf, sizeof(buf));
+  return 1;
+}
+
+static int extract_json_string(const char *json, const char *key, char *out, size_t cap) {
+  char pattern[64];
+  if (snprintf(pattern, sizeof(pattern), "\"%s\"", key) >= (int)sizeof(pattern)) return 0;
+  const char *p = strstr(json, pattern);
+  if (!p) return 0;
+  p += strlen(pattern);
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+  if (*p != ':') return 0;
+  ++p;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+  if (*p != '"') return 0;
+  ++p;
+  size_t i = 0;
+  while (*p && *p != '"') {
+    if (*p == '\\') {
+      ++p;
+      if (!*p) return 0;
+    }
+    if ((unsigned char)*p < 0x20 || (unsigned char)*p == 0x7f || i + 1 >= cap) return 0;
+    out[i++] = *p++;
+  }
+  if (*p != '"') return 0;
+  out[i] = '\0';
+  return i > 0;
 }
 
 static void hex(const unsigned char *in, size_t n, char *out) {
@@ -279,12 +380,12 @@ static void hex(const unsigned char *in, size_t n, char *out) {
 
 moonbit_string_t cfmon_fingerprint(moonbit_bytes_t state_bytes) {
   char *state = to_c_string(state_bytes);
-  unsigned char priv[32], pub[32], digest[SHA256_DIGEST_LENGTH];
+  unsigned char token[32], digest[SHA256_DIGEST_LENGTH];
   char result[65] = "";
-  if (state && load_or_create_key(state, priv, pub)) {
-    SHA256(pub, sizeof(pub), digest);
+  if (state && load_or_create_token(state, token)) {
+    SHA256(token, sizeof(token), digest);
     hex(digest, sizeof(digest), result);
-    OPENSSL_cleanse(priv, sizeof(priv));
+    OPENSSL_cleanse(token, sizeof(token));
   }
   free(state); moonbit_decref(state_bytes);
   return from_ascii(result);
@@ -293,39 +394,44 @@ moonbit_string_t cfmon_fingerprint(moonbit_bytes_t state_bytes) {
 int cfmon_signed_post(moonbit_bytes_t url_bytes, moonbit_bytes_t state_bytes, moonbit_bytes_t body_bytes) {
   char *url = to_c_string(url_bytes), *state = to_c_string(state_bytes), *body = to_c_string(body_bytes);
   int status = -1;
-  unsigned char priv[32], pub[32], nonce[16], sig[64];
-  if (!url || !state || !body || strlen(body) > 65536 || !load_or_create_key(state, priv, pub) || RAND_bytes(nonce, sizeof(nonce)) != 1) goto done;
-  char pubhex[65], noncehex[33], sighex[129], ts[32];
-  hex(pub, 32, pubhex); hex(nonce, 16, noncehex);
-  snprintf(ts, sizeof(ts), "%lld", (long long)time(NULL));
+  unsigned char token[32];
+  char token_hex[65] = "";
+  char client_id[280] = "", client_secret[280] = "";
+  if (!url || !state || !body || strlen(body) > 65536 || !load_or_create_token(state, token)) goto done;
+  hex(token, sizeof(token), token_hex);
   const char *path = strstr(url, "://");
   path = path ? strchr(path + 3, '/') : NULL;
-  if (!path || strchr(path, '?') || strchr(path, '#') ||
-      (strcmp(path, "/api/v1/pair") != 0 && strcmp(path, "/api/v1/ingest") != 0)) goto done;
-  size_t signed_len = 5 + strlen(path) + 1 + strlen(ts) + 1 + strlen(noncehex) + 1 + strlen(body);
-  char *signed_data = malloc(signed_len + 1);
-  if (!signed_data) goto done;
-  snprintf(signed_data, signed_len + 1, "POST\n%s\n%s\n%s\n%s", path, ts, noncehex, body);
-  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, priv, sizeof(priv));
-  EVP_MD_CTX *md = EVP_MD_CTX_new(); size_t sig_len = sizeof(sig);
-  int ok = key && md && EVP_DigestSignInit(md, NULL, NULL, NULL, key) > 0 && EVP_DigestSign(md, sig, &sig_len, (unsigned char *)signed_data, signed_len) > 0 && sig_len == 64;
-  EVP_MD_CTX_free(md); EVP_PKEY_free(key); OPENSSL_cleanse(signed_data, signed_len); free(signed_data);
-  if (!ok) goto done;
-  hex(sig, 64, sighex);
+  if (!path || strchr(path, '?') || strchr(path, '#')) goto done;
+  int is_pair = strcmp(path, "/api/v1/pair") == 0;
+  int is_ingest = strcmp(path, "/api/v1/ingest") == 0;
+  if (!is_pair && !is_ingest) goto done;
+  if (is_ingest && !load_service_token(state, client_id, sizeof(client_id), client_secret, sizeof(client_secret))) {
+    status = 401;
+    goto done;
+  }
   CURL *curl = curl_easy_init();
   if (!curl) goto done;
   struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");
-  char header[256];
-  snprintf(header, sizeof(header), "X-Cfmon-Key: %s", pubhex); headers = curl_slist_append(headers, header);
-  snprintf(header, sizeof(header), "X-Cfmon-Timestamp: %s", ts); headers = curl_slist_append(headers, header);
-  snprintf(header, sizeof(header), "X-Cfmon-Nonce: %s", noncehex); headers = curl_slist_append(headers, header);
-  snprintf(header, sizeof(header), "X-Cfmon-Signature: %s", sighex); headers = curl_slist_append(headers, header);
+  char auth_header[128];
+  snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", token_hex);
+  headers = curl_slist_append(headers, auth_header);
+  if (is_ingest) {
+    char id_header[320], secret_header[320];
+    snprintf(id_header, sizeof(id_header), "CF-Access-Client-Id: %s", client_id);
+    snprintf(secret_header, sizeof(secret_header), "CF-Access-Client-Secret: %s", client_secret);
+    headers = curl_slist_append(headers, id_header);
+    headers = curl_slist_append(headers, secret_header);
+    OPENSSL_cleanse(id_header, sizeof(id_header));
+    OPENSSL_cleanse(secret_header, sizeof(secret_header));
+  }
+  struct response_buffer resp = {{0}, 0};
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_body);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_body);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_NOPROXY, "localhost,127.0.0.1");
@@ -336,10 +442,23 @@ int cfmon_signed_post(moonbit_bytes_t url_bytes, moonbit_bytes_t state_bytes, mo
 #endif
   CURLcode result = curl_easy_perform(curl);
   long code = 0; curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
-  if (result == CURLE_OK) status = (int)code;
+  if (result == CURLE_OK) {
+    status = (int)code;
+    if (is_pair && status == 200) {
+      if (!extract_json_string(resp.data, "access_client_id", client_id, sizeof(client_id)) ||
+          !extract_json_string(resp.data, "access_client_secret", client_secret, sizeof(client_secret)) ||
+          !save_service_token(state, client_id, client_secret)) {
+        status = -1;
+      }
+    }
+  }
+  OPENSSL_cleanse(&resp, sizeof(resp));
   curl_slist_free_all(headers); curl_easy_cleanup(curl);
  done:
-  OPENSSL_cleanse(priv, sizeof(priv));
+  OPENSSL_cleanse(token, sizeof(token));
+  OPENSSL_cleanse(token_hex, sizeof(token_hex));
+  OPENSSL_cleanse(client_id, sizeof(client_id));
+  OPENSSL_cleanse(client_secret, sizeof(client_secret));
   free(url); free(state); free(body);
   moonbit_decref(url_bytes); moonbit_decref(state_bytes); moonbit_decref(body_bytes);
   return status;

@@ -1,10 +1,5 @@
 import { bindings, defineConfig, triggers } from "cf/config";
 
-/**
- * Secret-like files were detected but not read or migrated: .dev.vars.example. Only `secrets.required` entries are migrated.
- * @see https://developers.cloudflare.com/workers/configuration/secrets/
- */
-
 export default defineConfig({
 	...(process.env.CLOUDFLARE_ACCOUNT_ID
 		? { accountId: process.env.CLOUDFLARE_ACCOUNT_ID }
@@ -27,11 +22,17 @@ export default defineConfig({
 				schedule: "*/15 * * * *",
 			}),
 		],
-			env: {
+		env: {
 			ACCESS_TEAM_DOMAIN: bindings.text(
 				process.env.CFMON_ACCESS_TEAM_DOMAIN ?? "setup-pending.cloudflareaccess.com",
 			),
 			ACCESS_AUD: bindings.text(process.env.CFMON_ACCESS_AUD ?? "setup-pending"),
+			ACCESS_CLIENT_ID: bindings.text(
+				process.env.CFMON_ACCESS_CLIENT_ID ?? "setup-pending",
+			),
+			...(process.env.CFMON_ACCESS_CLIENT_SECRET
+				? { ACCESS_CLIENT_SECRET: bindings.secret() }
+				: {}),
 			METRICS: bindings.analyticsEngineDataset({
 				name: "cfmon_metrics",
 			}),
